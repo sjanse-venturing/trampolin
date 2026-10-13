@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "notes": "Recetas validadas en Windows 10 x64 (2026-10-11). Variables: {HD}=carpeta del juego, {CD}=unidad de datos (p. ej. 'M:'), {LABEL}=etiqueta de volumen.",
+  "games": [
+    {
+      "id": "TODDLER",
+      "order": 1,
+      "name": "Educación Infantil – Primeros Pasos",
+      "age": "2 a 3 años",
+      "engine": "aces",
+      "iso": { "file": "Trampolín Educación Infantil - Primeros Pasos.iso", "size": 255424512, "keyFile": "SUPPORT\\W32\\ACES.EXE" },
+      "copy": [ "SUPPORT\\W32", "SUPPORT\\CMN" ],
+      "exclude": [ "BKUP" ],
+      "exe": "ACES.EXE",
+      "args": "{CD}\\TODDLER\\START.PAC -iniSect TODDLER",
+      "icon": "TODDLER.EXE",
+      "ini": {},
+      "kaIni": {
+        "TODDLER": {
+          "ProductHDRoot": "{HD}", "ProductCDRoot": "{CD}", "CDVol": "{LABEL}", "CDDrv": "{CD}",
+          "Lang": "ESP", "TuneFileExtension": ".WGM", "KidProof": "Yes", "BorderColor": "0,0,0", "ProductName": "Trampolín"
+        }
+      },
+      "saves": [ "*.SAV", "*.DAT", "~~ka.swp" ]
+    },
+    {
+      "id": "PRSCHOOL",
+      "order": 2,
+      "name": "Educación Infantil – 1° Ciclo",
+      "age": "3 a 4 años",
+      "engine": "aces",
+      "iso": { "file": "Trampolín Educación Infantil - 1° Ciclo.iso", "size": 140679168, "keyFile": "SUPPORT\\W32\\ACES.EXE" },
+      "copy": [ "SUPPORT\\W32", "SUPPORT\\CMN" ],
+      "exclude": [],
+      "exe": "ACES.EXE",
+      "args": "{CD}\\PRSCHOOL\\START.PAC -iniSect PRSCHOOL",
+      "icon": "PRSCHOOL.EXE",
+      "ini": {},
+      "kaIni": {
+        "PRSCHOOL": {
+          "ProductHDRoot": "{HD}", "ProductCDRoot": "{CD}", "CDVol": "{LABEL}", "SrcDrv": "{CD}",
+          "Lang": "ESP", "TuneFileExtension": ".WGM", "KidProof": "Yes", "BorderColor": "0,0,0", "ProductName": "Trampolín"
+        }
+      },
+      "saves": [ "*.SAV", "*.DAT" ]
+    },
+    {
+      "id": "PRE_K",
+      "order": 3,
+      "name": "Educación Infantil – Primera Infancia",
+      "age": "4 años",
+      "engine": "peewee",
+      "iso": { "file": "Trampolín Educación Infantil - Primera Infancia.iso", "size": 153976832, "keyFile": "SUPPORT\\CMN\\PRE_K.EXE" },
+      "copy": [ "SUPPORT\\CMN" ],
+      "exclude": [],
+      "exe": "PRE_K.EXE",
+      "args": "",
+      "icon": "PRE_K.EXE",
+      "ini": {
+        "PRE_K.INI": {
+          "Hardware": { "GraphicStrategy": "3", "SoundStrategy": "2", "MusicStrategy": "2", "ResourceDirectory": "{CD}\\" }
+        }
+      },
+      "kaIni": {},
+      "saves": [ "*.INI", "*.SAV" ]
+    },
+    {
+      "id": "KG",
+      "order": 4,
+      "name": "Educación Infantil – 2° Ciclo",
+      "age": "5 años",
+      "engine": "ka-mfc",
+      "iso": { "file": "Trampolín Educación Infantil - 2° Ciclo.iso", "size": 94410752, "keyFile": "SUPPORT\\W32\\KG.EXE" },
+      "copy": [ "SUPPORT\\W32", "SUPPORT\\CMN" ],
+      "exclude": [],
+      "exe": "KG.EXE",
+      "args": "",
+      "icon": "KG.EXE",
+      "ini": {
+        "KG.INI": {
+          "Paths": { "HDPath": "{HD}\\", "CDPath": "{CD}\\KG\\32BIT\\", "SoundCDPath": "{CD}\\KG\\" },
+          "Video": { "NoWarnings": "1" }
+        }
+      },
+      "kaIni": {},
+      "saves": [ "PLYR*.INI", "volumes.sav", "ka.atr" ]
+    },
+    {
+      "id": "FG",
+      "order": 5,
+      "name": "Educación Primaria – 1° Ciclo",
+      "age": "6 a 7 años",
+      "engine": "ka-mfc",
+      "iso": { "file": "Trampolin - 1° Ciclo.iso", "size": 416952320, "keyFile": "SUPPORT\\W32\\FG.EXE" },
+      "copy": [ "SUPPORT\\W32", "SUPPORT\\CMN" ],
+      "exclude": [],
+      "exe": "FG.EXE",
+      "args": "",
+      "icon": "FG.EXE",
+      "ini": {
+        "FG.INI": {
+          "Paths": { "HDPath": "{HD}\\", "CDPath": "{CD}\\FG\\32BIT\\", "SoundCDPath": "{CD}\\FG\\" },
+          "Video": { "NoWarnings": "1" }
+        }
+      },
+      "kaIni": {},
+      "saves": [ "PLYR*.INI", "volumes.sav", "ka.atr" ]
+    },
+    {
+      "id": "2G",
+      "order": 6,
+      "name": "Educación Primaria – 2° Ciclo",
+      "age": "7 a 8 años",
+      "engine": "ka-mfc",
+      "iso": { "file": "Trampolin - 2° Ciclo.iso", "size": 300566528, "keyFile": "SUPPORT\\W32\\2G.EXE" },
+      "copy": [ "SUPPORT\\W32", "SUPPORT\\CMN" ],
+      "exclude": [],
+      "exe": "2G.EXE",
+      "args": "",
+      "icon": "2G.EXE",
+      "ini": {
+        "2G.INI": {
+          "Paths": { "HDPath": "{HD}\\", "CDPath": "{CD}\\2G\\32BIT\\", "SoundCDPath": "{CD}\\2G\\" },
+          "Video": { "NoWarnings": "1" }
+        }
+      },
+      "kaIni": {},
+      "saves": [ "PLYR*.INI", "volumes.sav", "ka.atr" ]
+    },
+    {
+      "id": "3G",
+      "order": 7,
+      "name": "Educación Primaria – 5° Curso",
+      "age": "8 a 9 años",
+      "engine": "ka-mfc",
+      "iso": { "file": "Trampolin - 5° Curso.iso", "size": 494227456, "keyFile": "SUPPORT\\W32\\3G.EXE" },
+      "copy": [ "SUPPORT\\W32", "SUPPORT\\CMN" ],
+      "exclude": [],
+      "exe": "3G.EXE",
+      "args": "",
+      "icon": "3G.EXE",
+      "ini": {
+        "3G.INI": {
+          "Paths": { "HDPath": "{HD}\\", "CDPath": "{CD}\\3G\\", "SoundCDPath": "{CD}\\3G\\" },
+          "Video": { "NoWarnings": "1", "FullScreen": "1", "HideTaskBar": "0" }
+        }
+      },
+      "kaIni": {},
+      "saves": [ "PLYR*.INI", "volumes.sav", "ka.atr" ]
+    },
+    {
+      "id": "4G",
+      "order": 8,
+      "name": "Educación Primaria – 6° Curso",
+      "age": "9 a 10 años",
+      "engine": "peewee",
+      "iso": { "file": "Trampolin - 6° Curso.iso", "size": 524453888, "keyFile": "SUPPORT\\CMN\\4G.EXE" },
+      "copy": [ "SUPPORT\\CMN" ],
+      "exclude": [],
+      "exe": "4G.EXE",
+      "args": "",
+      "icon": "4G.EXE",
+      "ini": {
+        "4G.INI": {
+          "Hardware": { "GraphicStrategy": "3", "SoundStrategy": "2", "MusicStrategy": "2", "ResourceDirectory": "{CD}\\" }
+        }
+      },
+      "kaIni": {},
+      "saves": [ "*.INI", "*.SAV" ]
+    }
+  ]
+}

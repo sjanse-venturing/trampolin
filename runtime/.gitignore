@@ -1,0 +1,4 @@
+native/obj/
+native/bin/*.lib
+native/bin/*.exp
+dist/

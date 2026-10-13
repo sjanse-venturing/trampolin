@@ -1,0 +1,3 @@
+LIBRARY trhook
+EXPORTS
+    TrPresent = _TrPresent@40

@@ -1,0 +1,21 @@
+# Imágenes de los discos originales (material con copyright, cientos de MB)
+*.iso
+trampolin_anaya.zip
+
+# Volcados de bash (Git for Windows / Claude Code)
+*.stackdump
+
+# Registros (ACES escribe ace.log en el directorio actual; el runtime, logs\*.log)
+*.log
+
+# Datos de partidas que los juegos crean si se ejecutan desde el repositorio
+~~ka.swp
+
+# Sistema operativo y editores
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~

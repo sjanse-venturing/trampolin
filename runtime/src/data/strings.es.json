@@ -1,0 +1,29 @@
+{
+  "errors": {
+    "TR-ENV-001": { "title": "Windows no compatible", "message": "Trampolín Runtime necesita Windows 10 u 11 de 64 bits.", "actions": [ "close" ] },
+    "TR-ENV-002": { "title": "Falta un componente de Windows", "message": "Falta un componente de Windows ({component}). Instalalo desde Windows Update y volvé a intentar.", "actions": [ "close" ] },
+    "TR-ENV-003": { "title": "Faltan archivos del programa", "message": "Faltan archivos de Trampolín Runtime ({file}). Volvé a descargar o descomprimir el programa completo.", "actions": [ "close" ] },
+    "TR-ISO-001": { "title": "No encontramos los discos", "message": "No encontramos los discos de Trampolín en «{path}». Elegí la carpeta donde están los archivos .iso.", "actions": [ "browse" ] },
+    "TR-ISO-002": { "title": "Disco no válido", "message": "El archivo «{file}» no parece un disco de Trampolín válido o está dañado.", "actions": [ "skip" ] },
+    "TR-ISO-003": { "title": "No se pudo abrir el disco", "message": "No pudimos abrir el disco «{game}». Puede que otro programa lo esté usando o que Windows no permita abrir imágenes de disco.", "actions": [ "retry", "details" ] },
+    "TR-ISO-004": { "title": "No hay letras de unidad libres", "message": "No quedan letras de unidad libres para abrir el disco. Desconectá alguna unidad (por ejemplo, un pendrive) y volvé a intentar.", "actions": [ "retry" ] },
+    "TR-DSK-001": { "title": "Sin espacio suficiente", "message": "No hay espacio suficiente en {drive}: se necesitan {need} y hay {free} libres.", "actions": [ "browse" ] },
+    "TR-DSK-002": { "title": "No se puede escribir en la carpeta", "message": "No se puede escribir en «{path}». Elegí otra carpeta (por ejemplo, la sugerida).", "actions": [ "browse" ] },
+    "TR-DSK-003": { "title": "Carpeta no compatible", "message": "Los juegos son de 1997 y no entienden algunos caracteres de esa ruta («{chars}»). Elegí una carpeta sin esos caracteres, por ejemplo C:\\Trampolin.", "actions": [ "browse" ] },
+    "TR-DSK-004": { "title": "Ruta demasiado larga", "message": "La carpeta elegida tiene una ruta demasiado larga para estos juegos (máximo {max} caracteres). Elegí una carpeta más corta, por ejemplo C:\\Trampolin.", "actions": [ "browse" ] },
+    "TR-CPY-001": { "title": "Error al copiar", "message": "Hubo un problema copiando «{game}» (archivo {file}). La imagen de disco puede estar dañada o el disco lleno.", "actions": [ "retry", "skip", "details" ] },
+    "TR-CPY-002": { "title": "Archivo bloqueado", "message": "Windows o el antivirus bloquearon un archivo del juego ({file}). Algunos antivirus desconfían de los programas antiguos.", "actions": [ "retry", "details" ] },
+    "TR-CFG-001": { "title": "No se pudo guardar la configuración", "message": "No pudimos guardar la configuración de «{game}».", "actions": [ "retry", "details" ] },
+    "TR-RUN-001": { "title": "Ya hay un juego abierto", "message": "Ya hay un juego de Trampolín abierto. Cerralo antes de abrir otro.", "actions": [ "close" ] },
+    "TR-RUN-002": { "title": "Falta el disco del juego", "message": "Para jugar a «{game}» necesitamos el archivo «{iso}», que ya no está en su lugar. Podés indicarnos dónde está.", "actions": [ "locate" ] },
+    "TR-RUN-003": { "title": "El juego se cerró", "message": "«{game}» se cerró al iniciar. Probá con «Reparar» o revisá los detalles.", "actions": [ "repair", "details" ] },
+    "TR-RUN-004": { "title": "El juego tuvo un error", "message": "«{game}» tuvo un error interno y se cerró (código {code}).", "actions": [ "details" ] },
+    "TR-RUN-005": { "title": "No se pudo iniciar", "message": "No se pudo iniciar «{game}». Es posible que un antivirus esté bloqueando la capa de compatibilidad.", "actions": [ "details" ] },
+    "TR-RUN-006": { "title": "Juego no instalado", "message": "«{game}» no está instalado o su instalación está incompleta. Usá «Reparar» o volvé a instalarlo.", "actions": [ "repair" ] },
+    "TR-GEN-001": { "title": "Ocurrió un error inesperado", "message": "Ocurrió un error inesperado. No es tu culpa: copiá el informe y envialo a quien te ayude con la computadora.", "actions": [ "copy", "details" ] }
+  },
+  "actions": {
+    "close": "Cerrar", "browse": "Elegir otra carpeta…", "skip": "Saltar", "retry": "Reintentar", "details": "Ver detalles",
+    "locate": "Buscar el archivo…", "repair": "Reparar", "copy": "Copiar informe"
+  }
+}
