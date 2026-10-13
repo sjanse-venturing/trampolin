@@ -350,6 +350,40 @@ function Set-TrIniValues {
     [IO.File]::WriteAllLines($Path, $lines.ToArray(), $enc)
 }
 
+function Repair-TrSectionSizes {
+    <#
+      WSOUND32.DLL (compilada con Watcom) declara sus secciones con tamaño virtual 0.
+      Windows 95 las mapeaba completas hasta la sección siguiente y la DLL usa esa
+      memoria (su .bss real es más grande que los datos del archivo). Windows 10 solo
+      mapea los bytes del archivo y el juego se cierra con 0xC0000005 al limpiar un
+      búfer (5° Curso, WSOUND32.DLL+0x1F306). Se completa el tamaño de cada sección
+      hasta la siguiente. Devuelve $true si modificó el archivo.
+    #>
+    param([Parameter(Mandatory)][string]$Path)
+    $b = [IO.File]::ReadAllBytes($Path)
+    if ($b.Length -lt 0x40 -or $b[0] -ne 0x4D -or $b[1] -ne 0x5A) { return $false }
+    $pe = [BitConverter]::ToInt32($b, 0x3C)
+    if ($pe -le 0 -or $pe + 24 -gt $b.Length -or [BitConverter]::ToUInt32($b, $pe) -ne 0x4550) { return $false }
+    $count = [BitConverter]::ToUInt16($b, $pe + 6)
+    $table = $pe + 24 + [BitConverter]::ToUInt16($b, $pe + 20)
+    $sizeOfImage = [BitConverter]::ToUInt32($b, $pe + 24 + 56)
+    $changed = $false
+    for ($i = 0; $i -lt $count; $i++) {
+        $h = $table + 40 * $i
+        if ([BitConverter]::ToUInt32($b, $h + 8) -ne 0) { continue }
+        $va = [BitConverter]::ToUInt32($b, $h + 12)
+        $next = if ($i + 1 -lt $count) { [BitConverter]::ToUInt32($b, $h + 40 + 12) } else { $sizeOfImage }
+        if ($next -le $va) { continue }
+        [BitConverter]::GetBytes([uint32]($next - $va)).CopyTo($b, $h + 8)
+        $changed = $true
+    }
+    if ($changed) {
+        (Get-Item -LiteralPath $Path).IsReadOnly = $false
+        [IO.File]::WriteAllBytes($Path, $b)
+    }
+    $changed
+}
+
 function Write-TrGameConfig {
     <# Escribe el INI propio del juego y su sección de KA.INI con las rutas actuales. #>
     param([Parameter(Mandatory)]$Game, [Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)][hashtable]$Vars)
@@ -358,6 +392,10 @@ function Write-TrGameConfig {
     if ($ini) { foreach ($file in $ini.Keys) { Set-TrIniValues -Path (Join-Path $hd $file) -Values $ini[$file] -Vars $Vars } }
     $ka = ConvertTo-TrHashtable $Game.kaIni
     if ($ka -and $ka.Count) { Set-TrIniValues -Path (Join-Path $Root 'games\KA.INI') -Values $ka -Vars $Vars }
+    $wsound = Join-Path $hd 'WSOUND32.DLL'
+    if ((Test-Path -LiteralPath $wsound) -and (Repair-TrSectionSizes -Path $wsound)) {
+        Write-TrLog Info "WSOUND32.DLL de $($Game.id): secciones completadas como en Windows 95"
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -659,7 +697,20 @@ function Complete-TrGame {
         if (-not $NoDiagnose) {
             $code = [int64]$Session.ExitCode
             if ($code -in 9001, 9002, 9003) { $diag = New-TrError 'TR-RUN-005' @{ game = $Session.Game.name } }
-            elseif ($code -eq 0xC0000005 -or $code -eq -1073741819) { $diag = New-TrError 'TR-RUN-004' @{ game = $Session.Game.name; code = ('0x{0:X8}' -f $Session.ExitCode) } }
+            elseif ($code -eq 0xC0000005 -or $code -eq -1073741819) {
+                # trhook deja en el log del juego dónde ocurrió el fallo (líneas "FALLO"): va al informe.
+                $crash = $null
+                $gameLog = Join-Path $Session.Root "logs\juego-$($Session.Id).log"
+                if (Test-Path -LiteralPath $gameLog) {
+                    $lines = @(Get-Content -LiteralPath $gameLog -Encoding UTF8 | Where-Object { $_ -match '\] FALLO ' })
+                    if ($lines.Count) {
+                        $text = ($lines | ForEach-Object { $_ -replace '^\[\d+\] FALLO ', '' }) -join [Environment]::NewLine
+                        Write-TrLog Error "Detalle del fallo de $($Session.Id):$([Environment]::NewLine)$text"
+                        $crash = New-Object Exception("Detalle del fallo:$([Environment]::NewLine)$text")
+                    }
+                }
+                $diag = New-TrError 'TR-RUN-004' @{ game = $Session.Game.name; code = ('0x{0:X8}' -f $Session.ExitCode) } $crash
+            }
             elseif ($elapsed -lt 5 -and $code -ne 0) { $diag = New-TrError 'TR-RUN-003' @{ game = $Session.Game.name } }
         }
     }
@@ -670,6 +721,6 @@ function Complete-TrGame {
 
 Export-ModuleMember -Function Get-TrAppRoot, Get-TrNativeBin, Get-TrCatalog, Get-TrGame, ConvertTo-TrHashtable, Get-TrConfig, Save-TrConfig,
     Get-TrDefaultInstallRoot, Get-TrManifest, Save-TrManifest, Test-TrPrerequisites, Find-TrIsos, Expand-TrZipIsos, Mount-TrIso, Dismount-TrIso,
-    New-TrSubst, Remove-TrSubst, Test-TrInstallRoot, Format-TrSize, Get-TrRequiredBytes, Set-TrIniValues, Write-TrGameConfig, Copy-TrFromIso,
+    New-TrSubst, Remove-TrSubst, Test-TrInstallRoot, Format-TrSize, Get-TrRequiredBytes, Set-TrIniValues, Write-TrGameConfig, Repair-TrSectionSizes, Copy-TrFromIso,
     Get-TrCopySize, Install-TrRuntimeFiles, Install-TrGame, New-TrShortcuts, Remove-TrShortcuts, Get-TrInstalledGames, Backup-TrSaves,
     Uninstall-TrGame, Get-TrRunningGame, Start-TrGame, Complete-TrGame

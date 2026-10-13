@@ -162,7 +162,8 @@
       "icon": "4G.EXE",
       "ini": {
         "4G.INI": {
-          "Hardware": { "GraphicStrategy": "3", "SoundStrategy": "2", "MusicStrategy": "2", "ResourceDirectory": "{CD}\\" }
+          "Hardware": { "GraphicStrategy": "3", "SoundStrategy": "100", "ResourceDirectory": "{CD}\\" },
+          "Options": { "SoundOn": "-1" }
         }
       },
       "kaIni": {},

@@ -41,6 +41,7 @@ static char g_kaIni[MAX_PATH];
 static char g_cdDrive;            /* 'T' o 0 */
 static char g_cdLabel[64];
 static int g_scale;               /* 0 = ajustar */
+static int g_viewW, g_viewH;      /* TRAMPOLIN_VIEW: tamaño fijo de la vista (diagnóstico) */
 static char g_swapDir[MAX_PATH];  /* carpeta para ~~ka.swp de ACES */
 static HMODULE g_self;
 
@@ -74,6 +75,8 @@ static void load_config(void) {
     read_env("TRAMPOLIN_CDLABEL", g_cdLabel, sizeof g_cdLabel);
     read_env("TRAMPOLIN_SCALE", tmp, sizeof tmp);
     g_scale = tmp[0] ? atoi(tmp) : 0;
+    read_env("TRAMPOLIN_VIEW", tmp, sizeof tmp);
+    if (sscanf(tmp, "%dx%d", &g_viewW, &g_viewH) != 2) g_viewW = g_viewH = 0;
     read_env("TRAMPOLIN_SWAPDIR", g_swapDir, sizeof g_swapDir);
     if (!g_swapDir[0]) {
         char *slash;
@@ -81,6 +84,72 @@ static void load_config(void) {
         slash = strrchr(g_swapDir, '\\');
         if (slash) *slash = 0;
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* Registro de fallos                                                   */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Si el juego se cae (violación de acceso, etc.), deja en el log el módulo y
+ * el desplazamiento donde ocurrió, los registros y la pila. Se registra
+ * siempre (sin traza): el lanzador copia este bloque al informe de error.
+ * Si el juego instala su propio filtro, lo llamamos después del nuestro.
+ */
+static LPTOP_LEVEL_EXCEPTION_FILTER g_gameFilter;
+
+static void describe_address(DWORD addr, char *out, size_t size) {
+    HMODULE m = NULL;
+    char path[MAX_PATH];
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)(ULONG_PTR)addr, &m) && m && GetModuleFileNameA(m, path, sizeof path)) {
+        const char *b = strrchr(path, '\\');
+        _snprintf(out, size, "%s+0x%lX", b ? b + 1 : path, addr - (DWORD)(ULONG_PTR)m);
+    } else {
+        _snprintf(out, size, "?");
+    }
+    out[size - 1] = 0;
+}
+
+static LONG WINAPI crash_filter(EXCEPTION_POINTERS *ep) {
+    static volatile LONG once;
+    if (ep && ep->ExceptionRecord && InterlockedExchange(&once, 1) == 0) {
+        EXCEPTION_RECORD *er = ep->ExceptionRecord;
+        DWORD eip = (DWORD)(ULONG_PTR)er->ExceptionAddress;
+        char where[MAX_PATH + 32];
+        describe_address(eip, where, sizeof where);
+        tlog("FALLO excepción 0x%08lX en 0x%08lX (%s), hilo %lu", er->ExceptionCode, eip, where, GetCurrentThreadId());
+        if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2)
+            tlog("FALLO acceso de %s a la dirección 0x%08lX",
+                 er->ExceptionInformation[0] == 0 ? "lectura" : er->ExceptionInformation[0] == 1 ? "escritura" : "ejecución",
+                 (DWORD)er->ExceptionInformation[1]);
+#ifdef _M_IX86
+        if (ep->ContextRecord) {
+            CONTEXT *c = ep->ContextRecord;
+            DWORD *sp = (DWORD *)(ULONG_PTR)c->Esp;
+            int i;
+            tlog("FALLO EAX=%08lX EBX=%08lX ECX=%08lX EDX=%08lX ESI=%08lX EDI=%08lX EBP=%08lX ESP=%08lX",
+                 c->Eax, c->Ebx, c->Ecx, c->Edx, c->Esi, c->Edi, c->Ebp, c->Esp);
+            /* Valores de la pila que apuntan a código: la cadena de llamadas aproximada. */
+            for (i = 0; i < 64; i++) {
+                DWORD v;
+                if (IsBadReadPtr(sp + i, sizeof v)) break;
+                v = sp[i];
+                describe_address(v, where, sizeof where);
+                if (where[0] != '?') tlog("FALLO pila[%02d] %08lX %s", i, v, where);
+            }
+        }
+#endif
+    }
+    return g_gameFilter ? g_gameFilter(ep) : EXCEPTION_CONTINUE_SEARCH;
+}
+
+typedef LPTOP_LEVEL_EXCEPTION_FILTER(WINAPI *SUEF_t)(LPTOP_LEVEL_EXCEPTION_FILTER);
+static SUEF_t real_SetUnhandledExceptionFilter;
+static LPTOP_LEVEL_EXCEPTION_FILTER WINAPI hk_SetUnhandledExceptionFilter(LPTOP_LEVEL_EXCEPTION_FILTER f) {
+    LPTOP_LEVEL_EXCEPTION_FILTER prev = g_gameFilter;
+    g_gameFilter = f;
+    return prev;
 }
 
 /* ------------------------------------------------------------------ */
@@ -112,6 +181,7 @@ static int g_ox, g_oy;     /* origen lógico del área 640x480 en la ventana */
 static int g_vx, g_vy;     /* origen real de la vista escalada */
 static int g_vw = LOGICAL_W, g_vh = LOGICAL_H; /* tamaño real de la vista */
 static WNDPROC g_targetProc;
+static int g_gameX, g_gameY; /* modo escenario: posición (en el padre) donde el juego cree que está su ventana */
 
 typedef BOOL(WINAPI *SWP_t)(HWND, HWND, int, int, int, int, UINT);
 typedef BOOL(WINAPI *MW_t)(HWND, int, int, int, int, BOOL);
@@ -144,6 +214,8 @@ static int ly(int v) { return g_oy + MulDiv(v - g_vy, LOGICAL_H, g_vh); }
 static void pick_size(int aw, int ah, int *w, int *h) {
     int s;
     if (g_scale == 1 || aw < LOGICAL_W || ah < LOGICAL_H) { *w = LOGICAL_W; *h = LOGICAL_H; return; }
+    /* Diagnóstico: tamaño fijo, aunque no entre en la pantalla (para reproducir otras resoluciones). */
+    if (g_viewW >= LOGICAL_W && g_viewH >= LOGICAL_H) { *w = g_viewW; *h = g_viewH; return; }
     if (g_scale >= 2) {
         for (s = g_scale; s > 1 && (LOGICAL_W * s > aw || LOGICAL_H * s > ah); s--) {}
         *w = LOGICAL_W * s; *h = LOGICAL_H * s;
@@ -159,7 +231,10 @@ static LRESULT CALLBACK target_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (scaled() && msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST && msg != WM_MOUSEWHEEL) {
         int x = (short)LOWORD(lp), y = (short)HIWORD(lp);
         lp = MAKELPARAM(lx(x), ly(y));
+        if (g_trace && msg != WM_MOUSEMOVE) tlog("MOUSE msg %04x %d,%d -> %d,%d", msg, x, y, lx(x), ly(y));
     }
+    if (g_trace && (msg == WM_ACTIVATEAPP || msg == WM_ACTIVATE || msg == WM_KILLFOCUS || msg == WM_SETFOCUS))
+        tlog("ventana msg %04x wp=%lx", msg, (DWORD)wp);
     return CallWindowProcA(g_targetProc, hwnd, msg, wp, lp);
 }
 
@@ -196,7 +271,7 @@ static void subclass_target(HWND hwnd) {
 }
 
 /* Modo escenario: agranda la ventana hija de 640x480 y la centra en su padre. */
-static void adopt_stage(HWND hwnd) {
+static void adopt_stage(HWND hwnd, int gameX, int gameY) {
     HWND parent = GetParent(hwnd);
     RECT area;
     int w, h, x, y;
@@ -207,6 +282,8 @@ static void adopt_stage(HWND hwnd) {
     x = (area.right - area.left - w) / 2;
     y = (area.bottom - area.top - h) / 2;
     g_mode = MODE_STAGE;
+    g_gameX = gameX;
+    g_gameY = gameY;
     g_ox = g_oy = g_vx = g_vy = 0;
     g_vw = w;
     g_vh = h;
@@ -274,9 +351,43 @@ static void shadow_palette(HDC dst, UINT usage) {
     if (pal) SelectPalette(g_shadowDC, pal, TRUE);
 }
 
+/* ¿El rectángulo lógico cae entero dentro del área de 640x480 (la que cubre la sombra)? */
+static int in_shadow(int x, int y, int w, int h) {
+    return g_shadowDC && x >= g_ox && y >= g_oy && x + w <= g_ox + LOGICAL_W && y + h <= g_oy + LOGICAL_H;
+}
+
+/*
+ * Presenta en la ventana un rectángulo lógico tomándolo de la sombra, con un
+ * píxel lógico de margen. Con escalas no enteras (p. ej. 2,25x) cada copia
+ * escalada redondea distinto, y al restaurar el fondo bajo un objeto que se
+ * mueve quedaban restos de 1 píxel; volviendo a pintar desde la sombra con
+ * margen, los bordes siempre quedan con el contenido actual.
+ */
+static BOOL present_shadow(HDC dst, int x, int y, int w, int h) {
+    int lx0 = x - 1, ly0 = y - 1, lx1 = x + w + 1, ly1 = y + h + 1, X0, Y0;
+    if (lx0 < g_ox) lx0 = g_ox;
+    if (ly0 < g_oy) ly0 = g_oy;
+    if (lx1 > g_ox + LOGICAL_W) lx1 = g_ox + LOGICAL_W;
+    if (ly1 > g_oy + LOGICAL_H) ly1 = g_oy + LOGICAL_H;
+    X0 = rx(lx0); Y0 = ry(ly0);
+    SetStretchBltMode(dst, COLORONCOLOR);
+    return real_StretchBlt(dst, X0, Y0, rx(lx1) - X0, ry(ly1) - Y0, g_shadowDC, lx0 - g_ox, ly0 - g_oy, lx1 - lx0, ly1 - ly0,
+                           SRCCOPY);
+}
+
 static BOOL stretch_mapped(HDC dst, int xd, int yd, int wd, int hd, HDC src, int xs, int ys, int ws, int hs, DWORD rop) {
     int x0 = rx(xd), y0 = ry(yd), x1 = rx(xd + wd), y1 = ry(yd + hd);
     BOOL r;
+    if (in_shadow(xd, yd, wd, hd)) {
+        /* La operación se hace sin escalar en la sombra y se presenta desde ahí. */
+        if (wd == ws && hd == hs) r = real_BitBlt(g_shadowDC, xd - g_ox, yd - g_oy, wd, hd, src, xs, ys, rop);
+        else {
+            SetStretchBltMode(g_shadowDC, COLORONCOLOR);
+            r = real_StretchBlt(g_shadowDC, xd - g_ox, yd - g_oy, wd, hd, src, xs, ys, ws, hs, rop);
+        }
+        present_shadow(dst, xd, yd, wd, hd);
+        return r;
+    }
     SetStretchBltMode(dst, COLORONCOLOR);
     r = real_StretchBlt(dst, x0, y0, x1 - x0, y1 - y0, src, xs, ys, ws, hs, rop);
     if (g_shadowDC) {
@@ -305,6 +416,7 @@ static BOOL WINAPI hk_BitBlt(HDC dst, int x, int y, int w, int h, HDC src, int x
         {
             int x0 = rx(x), y0 = ry(y);
             if (g_shadowDC) real_BitBlt(g_shadowDC, x - g_ox, y - g_oy, w, h, NULL, 0, 0, rop);
+            if (in_shadow(x, y, w, h)) return present_shadow(dst, x, y, w, h);
             return real_BitBlt(dst, x0, y0, rx(x + w) - x0, ry(y + h) - y0, NULL, 0, 0, rop);
         }
     }
@@ -324,7 +436,9 @@ static int WINAPI hk_StretchDIBits(HDC dst, int x, int y, int w, int h, int xs, 
         if (g_shadowDC) {
             shadow_palette(dst, usage);
             SetStretchBltMode(g_shadowDC, COLORONCOLOR);
-            real_StretchDIBits(g_shadowDC, x - g_ox, y - g_oy, w, h, xs, ys, ws, hs, bits, bmi, usage, rop);
+            if (real_StretchDIBits(g_shadowDC, x - g_ox, y - g_oy, w, h, xs, ys, ws, hs, bits, bmi, usage, rop) &&
+                in_shadow(x, y, w, h) && present_shadow(dst, x, y, w, h))
+                return h;
         }
         SetStretchBltMode(dst, COLORONCOLOR);
         return real_StretchDIBits(dst, x0, y0, rx(x + w) - x0, ry(y + h) - y0, xs, ys, ws, hs, bits, bmi, usage, rop);
@@ -344,7 +458,9 @@ static int WINAPI hk_SetDIBitsToDevice(HDC dst, int x, int y, DWORD w, DWORD h, 
         if (g_shadowDC) {
             shadow_palette(dst, usage);
             SetStretchBltMode(g_shadowDC, COLORONCOLOR);
-            real_StretchDIBits(g_shadowDC, x - g_ox, y - g_oy, (int)w, (int)h, xs, ys, (int)w, (int)h, bits, bmi, usage, SRCCOPY);
+            if (real_StretchDIBits(g_shadowDC, x - g_ox, y - g_oy, (int)w, (int)h, xs, ys, (int)w, (int)h, bits, bmi, usage, SRCCOPY) &&
+                in_shadow(x, (int)y, (int)w, (int)h) && present_shadow(dst, x, y, (int)w, (int)h))
+                return (int)lines;
         }
         SetStretchBltMode(dst, COLORONCOLOR);
         return real_StretchDIBits(dst, x0, y0, rx(x + (int)w) - x0, ry(y + (int)h) - y0, xs, ys, (int)w, (int)h, bits, bmi,
@@ -378,12 +494,17 @@ static BOOL WINAPI hk_ValidateRect(HWND hwnd, const RECT *rc) {
 
 /* Si el juego reubica el escenario, mantenemos nuestra ubicación escalada. */
 static BOOL WINAPI hk_SetWindowPos(HWND hwnd, HWND after, int x, int y, int w, int h, UINT flags) {
-    if (g_mode == MODE_STAGE && hwnd == g_target && scaled()) flags |= SWP_NOMOVE | SWP_NOSIZE;
+    if (g_mode == MODE_STAGE && hwnd == g_target && scaled()) {
+        if (!(flags & SWP_NOMOVE)) { g_gameX = x; g_gameY = y; }
+        flags |= SWP_NOMOVE | SWP_NOSIZE;
+    }
     return real_SetWindowPos(hwnd, after, x, y, w, h, flags);
 }
 
 static BOOL WINAPI hk_MoveWindow(HWND hwnd, int x, int y, int w, int h, BOOL repaint) {
     if (g_mode == MODE_STAGE && hwnd == g_target && scaled()) {
+        g_gameX = x;
+        g_gameY = y;
         if (repaint) real_InvalidateRect(hwnd, NULL, FALSE);
         return TRUE;
     }
@@ -503,6 +624,8 @@ static const char *redirect_file(const char *name, char *buf, size_t size) {
  * esos atributos al juego.
  */
 #define TR_HIDE_ATTRS (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)
+/* Sin atributos, Windows informa FILE_ATTRIBUTE_NORMAL (nunca 0). */
+static DWORD visible_attrs(DWORD a) { a &= ~TR_HIDE_ATTRS; return a ? a : FILE_ATTRIBUTE_NORMAL; }
 typedef HANDLE(WINAPI *FFFA_t)(LPCSTR, LPWIN32_FIND_DATAA);
 typedef BOOL(WINAPI *FNFA_t)(HANDLE, LPWIN32_FIND_DATAA);
 typedef DWORD(WINAPI *GFAA_t)(LPCSTR);
@@ -512,20 +635,20 @@ static GFAA_t real_GetFileAttributesA;
 
 static HANDLE WINAPI hk_FindFirstFileA(LPCSTR name, LPWIN32_FIND_DATAA fd) {
     HANDLE h = real_FindFirstFileA(name, fd);
-    if (h != INVALID_HANDLE_VALUE && fd) fd->dwFileAttributes &= ~TR_HIDE_ATTRS;
+    if (h != INVALID_HANDLE_VALUE && fd) fd->dwFileAttributes = visible_attrs(fd->dwFileAttributes);
     if (g_trace) tlog("FIND %s -> %s", name ? name : "(null)", h != INVALID_HANDLE_VALUE ? "ok" : "no");
     return h;
 }
 
 static BOOL WINAPI hk_FindNextFileA(HANDLE h, LPWIN32_FIND_DATAA fd) {
     BOOL r = real_FindNextFileA(h, fd);
-    if (r && fd) fd->dwFileAttributes &= ~TR_HIDE_ATTRS;
+    if (r && fd) fd->dwFileAttributes = visible_attrs(fd->dwFileAttributes);
     return r;
 }
 
 static DWORD WINAPI hk_GetFileAttributesA(LPCSTR name) {
     DWORD r = real_GetFileAttributesA(name);
-    return r == INVALID_FILE_ATTRIBUTES ? r : (r & ~TR_HIDE_ATTRS);
+    return r == INVALID_FILE_ATTRIBUTES ? r : visible_attrs(r);
 }
 
 typedef BOOL(WINAPI *DFA_t)(LPCSTR);
@@ -543,6 +666,26 @@ static HANDLE WINAPI hk_CreateFileA(LPCSTR name, DWORD acc, DWORD share, LPSECUR
     if (g_trace || h == INVALID_HANDLE_VALUE)
         tlog("FILE %s %s -> %s (err %lu)", (acc & GENERIC_WRITE) ? "W" : "R", name ? name : "(null)",
              h == INVALID_HANDLE_VALUE ? "FAIL" : "ok", h == INVALID_HANDLE_VALUE ? GetLastError() : 0);
+    return h;
+}
+
+/* APIs de archivo de Windows 3.1 (las usa PEEWEE): se registran igual que CreateFileA. */
+typedef HFILE(WINAPI *OF_t)(LPCSTR, LPOFSTRUCT, UINT);
+typedef HFILE(WINAPI *LO_t)(LPCSTR, int);
+static OF_t real_OpenFile;
+static LO_t real__lopen;
+static HFILE WINAPI hk_OpenFile(LPCSTR name, LPOFSTRUCT of, UINT style) {
+    HFILE h = real_OpenFile(name, of, style);
+    if (g_trace || h == HFILE_ERROR)
+        tlog("OPENFILE %s style=%x -> %s (err %lu)", name ? name : "(null)", style, h == HFILE_ERROR ? "FAIL" : "ok",
+             h == HFILE_ERROR ? GetLastError() : 0);
+    return h;
+}
+static HFILE WINAPI hk__lopen(LPCSTR name, int mode) {
+    HFILE h = real__lopen(name, mode);
+    if (g_trace || h == HFILE_ERROR)
+        tlog("LOPEN %s mode=%x -> %s (err %lu)", name ? name : "(null)", mode, h == HFILE_ERROR ? "FAIL" : "ok",
+             h == HFILE_ERROR ? GetLastError() : 0);
     return h;
 }
 
@@ -627,7 +770,7 @@ static HWND WINAPI hk_CreateWindowExA(DWORD ex, LPCSTR cls, LPCSTR title, DWORD 
                       ((ULONG_PTR)cls >> 16) ? cls : "(atom)", title ? title : "", style, x, y, w, h, parent, r);
     if (r && !parent && !g_mainWnd && (style & WS_CHILD) == 0) g_mainWnd = r;
     /* La ventana de 640x480 es el escenario donde el motor dibuja. */
-    if (r && w == LOGICAL_W && h == LOGICAL_H && (style & WS_CHILD)) adopt_stage(r);
+    if (r && w == LOGICAL_W && h == LOGICAL_H && (style & WS_CHILD)) adopt_stage(r, x, y);
     return r;
 }
 
@@ -642,22 +785,171 @@ static int target_origin(POINT *o) {
     return ClientToScreen(g_target, o);
 }
 
+/* Punto de pantalla real -> el que el juego espera (ver arriba). */
+/*
+ * Origen en pantalla del área cliente de la ventana destino tal como lo ve el
+ * juego. En modo escenario la ventana real está agrandada y recentrada, pero el
+ * juego sigue creyendo que está donde la creó (p. ej. 640x480 centrada en
+ * 363,144) y hace cuentas con esa posición (al arrastrar objetos resta ese
+ * origen al puntero). Todas las coordenadas de pantalla que ve el juego se
+ * expresan respecto de ese origen virtual. En modo lienzo coincide con el real.
+ */
+static void game_origin(POINT *g) {
+    if (g_mode == MODE_STAGE) {
+        g->x = g_gameX;
+        g->y = g_gameY;
+        ClientToScreen(GetParent(g_target), g);
+    } else {
+        g->x = g->y = 0;
+        ClientToScreen(g_target, g);
+    }
+}
+
+/* Punto de pantalla real -> el que espera el juego. */
+static void map_screen_point(POINT *p) {
+    POINT o, g;
+    if (target_origin(&o)) {
+        game_origin(&g);
+        p->x = g.x + lx(p->x - o.x);
+        p->y = g.y + ly(p->y - o.y);
+    }
+}
+
+/* Punto de pantalla del juego -> real. */
+static void unmap_screen_point(POINT *p) {
+    POINT o, g;
+    if (target_origin(&o)) {
+        game_origin(&g);
+        p->x = o.x + rx(p->x - g.x);
+        p->y = o.y + ry(p->y - g.y);
+    }
+}
+
+/* ¿Hay que presentar al juego la ventana en su posición virtual? */
+static int virtual_stage(HWND h) { return h && h == g_target && g_mode == MODE_STAGE && scaled(); }
+
 static BOOL WINAPI hk_GetCursorPos(LPPOINT p) {
     BOOL r = real_GetCursorPos(p);
-    POINT o;
-    if (r && p && target_origin(&o)) {
-        p->x = o.x + lx(p->x - o.x);
-        p->y = o.y + ly(p->y - o.y);
+    if (r && p) {
+        POINT in = *p;
+        map_screen_point(p);
+        if (g_trace) {
+            static POINT last;
+            if (in.x != last.x || in.y != last.y) tlog("GetCursorPos %ld,%ld -> %ld,%ld", in.x, in.y, p->x, p->y);
+            last = in;
+        }
+    }
+    return r;
+}
+
+/*
+ * MFC también lee la posición del mouse de GetMessagePos y del campo pt de
+ * MSG (por ejemplo, mientras se arrastra un objeto con el mouse capturado).
+ * Sin traducirlas, el objeto arrastrado se separaba del puntero en
+ * proporción a la escala.
+ */
+typedef DWORD(WINAPI *GMP_t)(void);
+typedef BOOL(WINAPI *GMA_t)(LPMSG, HWND, UINT, UINT);
+typedef BOOL(WINAPI *PMA_t)(LPMSG, HWND, UINT, UINT, UINT);
+static GMP_t real_GetMessagePos;
+static GMA_t real_GetMessageA;
+static PMA_t real_PeekMessageA;
+
+static DWORD WINAPI hk_GetMessagePos(void) {
+    DWORD r = real_GetMessagePos();
+    POINT p;
+    if (!scaled()) return r;
+    p.x = (short)LOWORD(r);
+    p.y = (short)HIWORD(r);
+    map_screen_point(&p);
+    if (g_trace) tlog("GetMessagePos %d,%d -> %ld,%ld", (short)LOWORD(r), (short)HIWORD(r), p.x, p.y);
+    return MAKELONG((short)p.x, (short)p.y);
+}
+
+static BOOL WINAPI hk_GetMessageA(LPMSG m, HWND h, UINT a, UINT b) {
+    BOOL r = real_GetMessageA(m, h, a, b);
+    if (r != -1 && m) map_screen_point(&m->pt);
+    return r;
+}
+
+static BOOL WINAPI hk_PeekMessageA(LPMSG m, HWND h, UINT a, UINT b, UINT rm) {
+    BOOL r = real_PeekMessageA(m, h, a, b, rm);
+    if (r && m) map_screen_point(&m->pt);
+    return r;
+}
+
+typedef BOOL(WINAPI *CTS_t)(HWND, LPPOINT);
+typedef int(WINAPI *MWP_t)(HWND, HWND, LPPOINT, UINT);
+typedef BOOL(WINAPI *GWR_t)(HWND, LPRECT);
+typedef HWND(WINAPI *WFP_t)(POINT);
+static CTS_t real_ClientToScreen, real_ScreenToClient;
+static MWP_t real_MapWindowPoints;
+static GWR_t real_GetWindowRect;
+static WFP_t real_WindowFromPoint;
+
+static BOOL WINAPI hk_ClientToScreen(HWND h, LPPOINT p) {
+    POINT g;
+    if (!virtual_stage(h) || !p) return real_ClientToScreen(h, p);
+    game_origin(&g);
+    p->x += g.x; p->y += g.y;
+    return TRUE;
+}
+
+static BOOL WINAPI hk_ScreenToClient(HWND h, LPPOINT p) {
+    POINT g;
+    if (!virtual_stage(h) || !p) return real_ScreenToClient(h, p);
+    game_origin(&g);
+    p->x -= g.x; p->y -= g.y;
+    return TRUE;
+}
+
+static int WINAPI hk_MapWindowPoints(HWND from, HWND to, LPPOINT pts, UINT n) {
+    UINT i;
+    LONG dx = 0, dy = 0;
+    if ((!virtual_stage(from) && !virtual_stage(to)) || !pts) return real_MapWindowPoints(from, to, pts, n);
+    for (i = 0; i < n; i++) {
+        POINT a = pts[i];
+        if (from) hk_ClientToScreen(from, &pts[i]);
+        if (to) hk_ScreenToClient(to, &pts[i]);
+        if (i == 0) { dx = pts[0].x - a.x; dy = pts[0].y - a.y; }
+    }
+    return MAKELONG((short)dx, (short)dy);
+}
+
+static BOOL WINAPI hk_GetWindowRect(HWND h, LPRECT r) {
+    POINT g;
+    if (!virtual_stage(h) || !r) return real_GetWindowRect(h, r);
+    game_origin(&g);
+    r->left = g.x; r->top = g.y; r->right = g.x + LOGICAL_W; r->bottom = g.y + LOGICAL_H;
+    return TRUE;
+}
+
+static HWND WINAPI hk_WindowFromPoint(POINT p) {
+    if (g_mode == MODE_STAGE) unmap_screen_point(&p);
+    return real_WindowFromPoint(p);
+}
+
+/* Diagnóstico (solo con traza): consultas al estado físico de los botones/teclas. */
+typedef SHORT(WINAPI *GAKS_t)(int);
+static GAKS_t real_GetAsyncKeyState;
+static SHORT WINAPI hk_GetAsyncKeyState(int vk) {
+    SHORT r = real_GetAsyncKeyState(vk);
+    if (g_trace) {
+        static int lastVk = -1;
+        static SHORT lastR = 0x7fff;
+        if (vk != lastVk || r != lastR) tlog("GetAsyncKeyState(%d) -> %04x", vk, (unsigned short)r);
+        lastVk = vk; lastR = r;
     }
     return r;
 }
 
 static BOOL WINAPI hk_SetCursorPos(int x, int y) {
-    POINT o;
-    if (target_origin(&o)) {
-        x = o.x + rx(x - o.x);
-        y = o.y + ry(y - o.y);
-    }
+    POINT p;
+    int x0 = x, y0 = y;
+    p.x = x; p.y = y;
+    unmap_screen_point(&p);
+    x = p.x; y = p.y;
+    if (g_trace) tlog("SetCursorPos %d,%d -> %d,%d", x0, y0, x, y);
     return real_SetCursorPos(x, y);
 }
 
@@ -779,6 +1071,36 @@ static MMRESULT run_wave_pumping(WOH_t fn, HWAVEOUT h, const char *name) {
 static MMRESULT WINAPI hk_waveOutClose(HWAVEOUT h) { return run_wave_pumping(real_waveOutClose, h, "waveOutClose"); }
 static MMRESULT WINAPI hk_waveOutReset(HWAVEOUT h) { return run_wave_pumping(real_waveOutReset, h, "waveOutReset"); }
 
+/* Diagnóstico (solo con traza): ¿el juego realmente envía audio y con qué volumen? */
+typedef MMRESULT(WINAPI *WOW_t)(HWAVEOUT, LPWAVEHDR, UINT);
+typedef MMRESULT(WINAPI *WOSV_t)(HWAVEOUT, DWORD);
+static WOW_t real_waveOutWrite;
+static WOSV_t real_waveOutSetVolume;
+static MMRESULT WINAPI hk_waveOutWrite(HWAVEOUT h, LPWAVEHDR hdr, UINT size) {
+    MMRESULT r = real_waveOutWrite(h, hdr, size);
+    if (g_trace) {
+        static LONG n;
+        LONG k = InterlockedIncrement(&n);
+        if (k <= 5 || (k % 50) == 0) {
+            int mn = 255, mx = 0;
+            DWORD i;
+            if (hdr && hdr->lpData)
+                for (i = 0; i < hdr->dwBufferLength; i++) {
+                    int v = (BYTE)hdr->lpData[i];
+                    if (v < mn) mn = v;
+                    if (v > mx) mx = v;
+                }
+            tlog("waveOutWrite #%ld %p %lu bytes -> %u (muestras %d..%d)", k, h, hdr ? hdr->dwBufferLength : 0, r, mn, mx);
+        }
+    }
+    return r;
+}
+static MMRESULT WINAPI hk_waveOutSetVolume(HWAVEOUT h, DWORD vol) {
+    MMRESULT r = real_waveOutSetVolume(h, vol);
+    if (g_trace) tlog("waveOutSetVolume %p %08lX -> %u", h, vol, r);
+    return r;
+}
+
 static Hook g_hooks[] = {
     { "KERNEL32.DLL", "GetPrivateProfileStringA", hk_GetPrivateProfileStringA, (void **)&real_GetPrivateProfileStringA },
     { "KERNEL32.DLL", "GetPrivateProfileIntA", hk_GetPrivateProfileIntA, (void **)&real_GetPrivateProfileIntA },
@@ -786,6 +1108,8 @@ static Hook g_hooks[] = {
     { "KERNEL32.DLL", "GetPrivateProfileSectionA", hk_GetPrivateProfileSectionA, (void **)&real_GetPrivateProfileSectionA },
     { "KERNEL32.DLL", "CreateFileA", hk_CreateFileA, (void **)&real_CreateFileA },
     { "KERNEL32.DLL", "DeleteFileA", hk_DeleteFileA, (void **)&real_DeleteFileA },
+    { "KERNEL32.DLL", "OpenFile", hk_OpenFile, (void **)&real_OpenFile },
+    { "KERNEL32.DLL", "_lopen", hk__lopen, (void **)&real__lopen },
     { "KERNEL32.DLL", "GetFileAttributesA", hk_GetFileAttributesA, (void **)&real_GetFileAttributesA },
     { "KERNEL32.DLL", "FindFirstFileA", hk_FindFirstFileA, (void **)&real_FindFirstFileA },
     { "KERNEL32.DLL", "FindNextFileA", hk_FindNextFileA, (void **)&real_FindNextFileA },
@@ -793,12 +1117,22 @@ static Hook g_hooks[] = {
     { "KERNEL32.DLL", "GetDiskFreeSpaceA", hk_GetDiskFreeSpaceA, (void **)&real_GetDiskFreeSpaceA },
     { "KERNEL32.DLL", "GetVolumeInformationA", hk_GetVolumeInformationA, (void **)&real_GetVolumeInformationA },
     { "KERNEL32.DLL", "LoadLibraryA", hk_LoadLibraryA, (void **)&real_LoadLibraryA },
+    { "KERNEL32.DLL", "SetUnhandledExceptionFilter", hk_SetUnhandledExceptionFilter, (void **)&real_SetUnhandledExceptionFilter },
     { "USER32.DLL", "ChangeDisplaySettingsA", hk_ChangeDisplaySettingsA, (void **)&real_ChangeDisplaySettingsA },
     { "USER32.DLL", "SetSysColors", hk_SetSysColors, (void **)&real_SetSysColors },
     { "USER32.DLL", "MessageBoxA", hk_MessageBoxA, (void **)&real_MessageBoxA },
     { "USER32.DLL", "CreateWindowExA", hk_CreateWindowExA, (void **)&real_CreateWindowExA },
     { "USER32.DLL", "GetCursorPos", hk_GetCursorPos, (void **)&real_GetCursorPos },
     { "USER32.DLL", "SetCursorPos", hk_SetCursorPos, (void **)&real_SetCursorPos },
+    { "USER32.DLL", "GetMessagePos", hk_GetMessagePos, (void **)&real_GetMessagePos },
+    { "USER32.DLL", "GetAsyncKeyState", hk_GetAsyncKeyState, (void **)&real_GetAsyncKeyState },
+    { "USER32.DLL", "ClientToScreen", hk_ClientToScreen, (void **)&real_ClientToScreen },
+    { "USER32.DLL", "ScreenToClient", hk_ScreenToClient, (void **)&real_ScreenToClient },
+    { "USER32.DLL", "MapWindowPoints", hk_MapWindowPoints, (void **)&real_MapWindowPoints },
+    { "USER32.DLL", "GetWindowRect", hk_GetWindowRect, (void **)&real_GetWindowRect },
+    { "USER32.DLL", "WindowFromPoint", hk_WindowFromPoint, (void **)&real_WindowFromPoint },
+    { "USER32.DLL", "GetMessageA", hk_GetMessageA, (void **)&real_GetMessageA },
+    { "USER32.DLL", "PeekMessageA", hk_PeekMessageA, (void **)&real_PeekMessageA },
     { "USER32.DLL", "GetClientRect", hk_GetClientRect, (void **)&real_GetClientRect },
     { "USER32.DLL", "InvalidateRect", hk_InvalidateRect, (void **)&real_InvalidateRect },
     { "USER32.DLL", "ValidateRect", hk_ValidateRect, (void **)&real_ValidateRect },
@@ -944,6 +1278,34 @@ static void hook_winmm(void) {
     hook_winmm_fn(winmm, base, "waveOutOpen", hk_waveOutOpen, (void **)&real_waveOutOpen);
     hook_winmm_fn(winmm, base, "waveOutClose", hk_waveOutClose, (void **)&real_waveOutClose);
     hook_winmm_fn(winmm, base, "waveOutReset", hk_waveOutReset, (void **)&real_waveOutReset);
+    hook_winmm_fn(winmm, base, "waveOutWrite", hk_waveOutWrite, (void **)&real_waveOutWrite);
+    hook_winmm_fn(winmm, base, "waveOutSetVolume", hk_waveOutSetVolume, (void **)&real_waveOutSetVolume);
+}
+
+/*
+ * DPI: con el escalado de Windows (p. ej. 125 %), a un programa antiguo
+ * Windows le "virtualiza" las coordenadas (pantalla de 1536x864 en lugar de
+ * 1920x1080), pero no todas las API de mouse lo hacen igual: al arrastrar, el
+ * puntero del juego avanzaba ~80 % de lo que avanzaba el mouse real. Declaramos
+ * el proceso consciente de DPI antes de que cree ventanas: todas las API hablan
+ * en píxeles físicos y nosotros ya escalamos la imagen.
+ * TRAMPOLIN_DPIAWARE=0 lo desactiva (diagnóstico).
+ */
+static void make_dpi_aware(void) {
+    typedef BOOL(WINAPI *SPDAC_t)(HANDLE);
+    typedef BOOL(WINAPI *SPDA_t)(void);
+    char v[8];
+    HMODULE u = GetModuleHandleA("user32.dll");
+    SPDAC_t ctx;
+    read_env("TRAMPOLIN_DPIAWARE", v, sizeof v);
+    if (v[0] == '0' || !u) return;
+    ctx = (SPDAC_t)GetProcAddress(u, "SetProcessDpiAwarenessContext");
+    if (ctx && ctx((HANDLE)-4 /* DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 */)) { tlog("DPI: proceso consciente de DPI (por monitor v2)"); return; }
+    {
+        SPDA_t old = (SPDA_t)GetProcAddress(u, "SetProcessDPIAware");
+        if (old && old()) tlog("DPI: proceso consciente de DPI (sistema)");
+        else tlog("aviso: no se pudo declarar el proceso consciente de DPI (err %lu)", GetLastError());
+    }
 }
 
 static int is_system_module(HMODULE m) {
@@ -972,6 +1334,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved) {
         InitializeCriticalSection(&g_logLock);
         load_config();
         resolve_reals();
+        SetUnhandledExceptionFilter(crash_filter);
+        make_dpi_aware();
         n = patch_module(GetModuleHandleA(NULL));
         hook_winmm();
         GetModuleFileNameA(NULL, exe, sizeof exe);
