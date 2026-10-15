@@ -176,7 +176,6 @@ El modo B pasa el chequeo de CD sin trucos, porque Windows expone la ISO montada
 ```
 Trampolin/                         ← este proyecto
 ├─ RUNTIME.md                      ← este documento
-├─ REMASTER.md
 ├─ runtime/
 │  ├─ Trampolin.cmd                ← punto de entrada (doble clic)
 │  ├─ LEEME-RUNTIME.md             ← documento para el usuario final
@@ -813,7 +812,7 @@ Instalación limpia; instalación con ruta personalizada con espacios; ruta con 
 1. Process Monitor filtrado por el proceso → exportar CSV → buscar `NAME NOT FOUND` y `ACCESS DENIED`.
 2. API Monitor con los grupos *Graphics and Gaming → GDI*, *Audio and Video → Windows Multimedia* y *System Services → Kernel* → ver la última llamada antes del fallo.
 3. Visor de eventos (`Get-WinEvent -LogName Application -MaxEvents 20 | ? ProviderName -eq 'Application Error'`) → módulo y offset del fallo.
-4. x32dbg: lanzar el exe y romper en la excepción. Con el offset, ubicar la función en Ghidra (ver REMASTER.md §4).
+4. x32dbg: lanzar el exe y romper en la excepción. Con el offset, ubicar la función en Ghidra (importar el exe con auto-análisis; en los exe KA-MFC aplicar las firmas FID de MFC 4.x/MSVC 5, en ACES (Watcom) usar `__watcall` como convención por defecto y en PEEWEE (Borland) `__fastcall`).
 
 ---
 
