@@ -85,6 +85,63 @@ Test-Case 'Set-TrIniValues escribe en ANSI (los juegos usan APIs "A")' {
     Assert-True ($bytes -contains 0xED) 'la í no se guardó como byte ANSI 0xED'
 }
 
+Write-Host 'Partidas (exportar / importar, mismo formato que Linux)'
+function New-FakeInstall {
+    <# Instalación mínima: manifiesto y el exe de cada juego, sin copiar discos. #>
+    param([string]$Name, [string[]]$Ids)
+    $root = Join-Path $tmp $Name
+    $m = [ordered]@{ version = 1; games = [ordered]@{} }
+    foreach ($id in $Ids) {
+        $hd = Join-Path $root "games\$id"
+        New-Item -ItemType Directory -Force -Path $hd | Out-Null
+        [IO.File]::WriteAllText((Join-Path $hd (Get-TrGame $id).exe), 'MZ')
+        $m.games[$id] = [ordered]@{ id = $id; dataMode = 'copy'; hd = $hd; cd = $null; isoPath = ''; label = '' }
+    }
+    Save-TrManifest -Root $root -Manifest $m
+    $root
+}
+Test-Case 'Exportar todas e importar en otra instalación' {
+    $a = New-FakeInstall 'savesA' @('KG', 'PRSCHOOL')
+    [IO.File]::WriteAllText((Join-Path $a 'games\KG\PLYR0001.INI'), "[Player]`r`nName=Ana")
+    [IO.File]::WriteAllText((Join-Path $a 'games\KG\volumes.sav'), 'v')
+    [IO.File]::WriteAllText((Join-Path $a 'games\KG\KG.INI'), 'no es partida')
+    [IO.File]::WriteAllText((Join-Path $a 'games\PRSCHOOL\ST1.DAT'), 'alumno')
+    $zip = Export-TrAllSaves -Root $a -Destination (Join-Path $tmp 'out')
+    Assert-True ($zip -and (Split-Path -Leaf $zip) -like 'trampolin-partidas-*.zip') "nombre del zip: $zip"
+    $content = Read-TrSavesZip -Zip $zip
+    Assert-True ($content.Games['KG'].Count -eq 2) 'KG debería tener 2 archivos (KG.INI no es partida)'
+    $b = New-FakeInstall 'savesB' @('KG')
+    [IO.File]::WriteAllText((Join-Path $b 'games\KG\plyr0001.ini'), 'vieja')
+    $r = Import-TrSaves -Root $b -Zip $zip -BackupDestination (Join-Path $tmp 'bk')
+    Assert-True (@($r.Imported['KG']).Count -eq 2) 'no importó KG'
+    Assert-True ($r.Skipped['PRSCHOOL'] -eq 'no está instalado') 'PRSCHOOL debería saltearse'
+    Assert-True (@($r.Backups).Count -eq 1) 'no guardó la copia de las partidas anteriores'
+    $names = @(Get-ChildItem (Join-Path $b 'games\KG') -Filter 'plyr*' | ForEach-Object Name)
+    Assert-True ($names.Count -eq 1 -and $names[0] -ceq 'PLYR0001.INI') "archivos: $($names -join ',')"
+    Assert-True ([IO.File]::ReadAllText((Join-Path $b 'games\KG\PLYR0001.INI')) -match 'Ana') 'contenido'
+}
+Test-Case 'Importa un zip de un juego del formato anterior (sin trampolin-saves.json)' {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $src = Join-Path $tmp 'legacy'; New-Item -ItemType Directory -Force -Path $src | Out-Null
+    [IO.File]::WriteAllText((Join-Path $src 'PLYR0002.INI'), 'Beto')
+    $zip = Join-Path $tmp 'KG-20260101-120000.zip'
+    [IO.Compression.ZipFile]::CreateFromDirectory($src, $zip)
+    $b = New-FakeInstall 'savesC' @('KG')
+    $r = Import-TrSaves -Root $b -Zip $zip -BackupDestination (Join-Path $tmp 'bk')
+    Assert-True (Test-Path (Join-Path $b 'games\KG\PLYR0002.INI')) 'no se importó'
+}
+Test-Case 'Rechaza zips que no son partidas y entradas peligrosas (TR-SAV-001)' {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = Join-Path $tmp 'otro.zip'
+    $archive = [IO.Compression.ZipFile]::Open($zip, 'Create')
+    try {
+        foreach ($n in @('../evil.ini', 'KG/../../x.sav', 'KG/sub/PLYR1.INI', 'KG/KG.EXE')) {
+            $w = New-Object IO.StreamWriter($archive.CreateEntry($n).Open()); $w.Write('x'); $w.Dispose()
+        }
+    } finally { $archive.Dispose() }
+    Assert-Throws { Read-TrSavesZip -Zip $zip } 'TR-SAV-001'
+}
+
 if ($IsoFolder) {
     Write-Host 'Integración con las imágenes reales'
     $found = $null

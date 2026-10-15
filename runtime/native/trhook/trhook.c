@@ -407,7 +407,18 @@ BOOL WINAPI TrPresent(HDC dst, int xd, int yd, int wd, int hd, HDC src, int xs, 
     return stretch_mapped(dst, xd, yd, wd, hd, src, xs, ys, ws, hs, SRCCOPY);
 }
 
+/* Traza: las primeras copias a pantalla (para diagnosticar pantallas negras). */
+static void trace_blit(const char *fn, HDC dst, int x, int y, int w, int h, HDC src, int xs, int ys) {
+    static LONG n;
+    if (g_trace && InterlockedIncrement(&n) <= 40) {
+        COLORREF c = src ? GetPixel(src, xs + w / 2, ys + h / 2) : CLR_INVALID;
+        tlog("%s dst=%p (ventana %p) %d,%d %dx%d src=%p tipo=%lu centro=%06lX", fn, dst, WindowFromDC(dst), x, y, w, h, src,
+             src ? GetObjectType(src) : 0, (unsigned long)c);
+    }
+}
+
 static BOOL WINAPI hk_BitBlt(HDC dst, int x, int y, int w, int h, HDC src, int xs, int ys, DWORD rop) {
+    trace_blit("BitBlt", dst, x, y, w, h, src, xs, ys);
     /* Lectura de la ventana (guardar el fondo bajo un objeto): desde la sombra. */
     if (reads_target(src)) { src = g_shadowDC; xs -= g_ox; ys -= g_oy; }
     if (maps_dc(dst)) {
@@ -431,6 +442,7 @@ static BOOL WINAPI hk_StretchBlt(HDC dst, int x, int y, int w, int h, HDC src, i
 
 static int WINAPI hk_StretchDIBits(HDC dst, int x, int y, int w, int h, int xs, int ys, int ws, int hs, const VOID *bits,
                                    const BITMAPINFO *bmi, UINT usage, DWORD rop) {
+    trace_blit("StretchDIBits", dst, x, y, w, h, NULL, 0, 0);
     if (maps_dc(dst)) {
         int x0 = rx(x), y0 = ry(y);
         if (g_shadowDC) {
@@ -453,6 +465,7 @@ static int WINAPI hk_StretchDIBits(HDC dst, int x, int y, int w, int h, int xs, 
  */
 static int WINAPI hk_SetDIBitsToDevice(HDC dst, int x, int y, DWORD w, DWORD h, int xs, int ys, UINT start, UINT lines,
                                        const VOID *bits, const BITMAPINFO *bmi, UINT usage) {
+    trace_blit("SetDIBitsToDevice", dst, x, y, (int)w, (int)h, NULL, 0, 0);
     if (bmi && start == 0 && (DWORD)abs(bmi->bmiHeader.biHeight) == lines && maps_dc(dst)) {
         int x0 = rx(x), y0 = ry(y);
         if (g_shadowDC) {
@@ -750,6 +763,78 @@ static UINT WINAPI hk_SetSystemPaletteUse(HDC dc, UINT use) {
     return SYSPAL_STATIC;
 }
 
+/*
+ * Paleta del sistema emulada. Los motores arman una "paleta identidad": realizan
+ * su paleta y la leen de vuelta con GetSystemPaletteEntries para armar la tabla
+ * de colores de sus DIB. En color verdadero Windows 10 sigue informando una
+ * paleta del sistema (los 20 colores estáticos más lo último que se realizó);
+ * Wine / Proton devuelve 0 entradas y NUMRESERVED = -1, y los juegos quedan con
+ * todos los colores en negro (6° Curso, ACES, KA-MFC). Si la pantalla no tiene
+ * paleta y la llamada real no devuelve nada, respondemos como Windows.
+ */
+typedef UINT(WINAPI *GSPE_t)(HDC, UINT, UINT, LPPALETTEENTRY);
+typedef UINT(WINAPI *RP_t)(HDC);
+typedef int(WINAPI *GDC_t)(HDC, int);
+static GSPE_t real_GetSystemPaletteEntries;
+static RP_t real_RealizePalette;
+static GDC_t real_GetDeviceCaps;
+static PALETTEENTRY g_sysPal[256];
+static int g_sysPalInit;
+
+static void syspal_init(void) {
+    static const DWORD statics[20] = {
+        0x000000, 0x800000, 0x008000, 0x808000, 0x000080, 0x800080, 0x008080, 0xC0C0C0, 0xC0DCC0, 0xA6CAF0,
+        0xFFFBF0, 0xA0A0A4, 0x808080, 0xFF0000, 0x00FF00, 0xFFFF00, 0x0000FF, 0xFF00FF, 0x00FFFF, 0xFFFFFF };
+    int i;
+    if (g_sysPalInit) return;
+    g_sysPalInit = 1;
+    for (i = 0; i < 20; i++) {
+        PALETTEENTRY *e = &g_sysPal[i < 10 ? i : 236 + i];
+        e->peRed = (BYTE)(statics[i] >> 16); e->peGreen = (BYTE)(statics[i] >> 8); e->peBlue = (BYTE)statics[i]; e->peFlags = 0;
+    }
+}
+
+static int has_palette(HDC dc) { return (real_GetDeviceCaps(dc, RASTERCAPS) & RC_PALETTE) != 0; }
+
+static UINT WINAPI hk_GetSystemPaletteEntries(HDC dc, UINT start, UINT n, LPPALETTEENTRY pe) {
+    UINT r = real_GetSystemPaletteEntries(dc, start, n, pe);
+    if (r == 0 && start < 256 && !has_palette(dc)) {
+        syspal_init();
+        if (n > 256 - start) n = 256 - start;
+        if (pe) memcpy(pe, &g_sysPal[start], n * sizeof *pe);
+        r = n;
+    }
+    if (g_trace) tlog("GetSystemPaletteEntries(%u, %u) -> %u", start, n, r);
+    return r;
+}
+
+/* Al realizar una paleta, sus colores pasan a la paleta del sistema emulada (como en primer plano en Windows). */
+static UINT WINAPI hk_RealizePalette(HDC dc) {
+    UINT r = real_RealizePalette(dc);
+    HPALETTE pal = (HPALETTE)GetCurrentObject(dc, OBJ_PAL);
+    PALETTEENTRY pe[256];
+    UINT n, i;
+    if (pal && !has_palette(dc) && (n = GetPaletteEntries(pal, 0, 256, pe)) > 0) {
+        syspal_init();
+        if (n == 256) {
+            for (i = 10; i < 246; i++) g_sysPal[i] = pe[i];
+        } else {
+            for (i = 0; i < n && i < 236; i++) g_sysPal[10 + i] = pe[i];
+        }
+    }
+    if (g_trace) tlog("RealizePalette(%p, ventana %p) -> %u", dc, WindowFromDC(dc), r);
+    return r;
+}
+
+/* NUMRESERVED: Windows informa los 20 colores estáticos aunque la pantalla no tenga paleta; Wine, -1. */
+static int WINAPI hk_GetDeviceCaps(HDC dc, int idx) {
+    int r = real_GetDeviceCaps(dc, idx);
+    if (idx == NUMRESERVED && r < 0) r = 20;
+    if (g_trace && (idx == NUMRESERVED || idx == SIZEPALETTE || idx == RASTERCAPS || idx == BITSPIXEL || idx == PLANES))
+        tlog("GetDeviceCaps(%d) -> %d", idx, r);
+    return r;
+}
+
 static UINT_PTR WINAPI hk_SHAppBarMessage(DWORD msg, PAPPBARDATA data) {
     if (msg == ABM_SETSTATE) {
         tlog("SHAppBarMessage(ABM_SETSTATE) ignorado");
@@ -763,9 +848,45 @@ static int WINAPI hk_MessageBoxA(HWND hwnd, LPCSTR text, LPCSTR caption, UINT ty
     return real_MessageBoxA(hwnd, text, caption, type);
 }
 
+/*
+ * En color verdadero Windows no envía WM_QUERYNEWPALETTE, WM_PALETTECHANGED ni
+ * WM_PALETTEISCHANGING (no hay paleta de pantalla); Wine sí, al activar la
+ * ventana. ACES los atiende con assert(modo de 256 colores) y falla con
+ * "Assertion failed: line 407 in file vgawin2". Las ventanas principales del
+ * juego no ven esos mensajes si la pantalla no tiene paleta.
+ */
+#define TR_PAL_PROP "TrampolinPalProc"
+
+static int screen_has_palette(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        HDC dc = GetDC(NULL);
+        cached = dc ? has_palette(dc) : 0;
+        if (dc) ReleaseDC(NULL, dc);
+    }
+    return cached;
+}
+
+static LRESULT CALLBACK palette_filter_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    WNDPROC orig = (WNDPROC)GetPropA(h, TR_PAL_PROP);
+    if ((m == WM_QUERYNEWPALETTE || m == WM_PALETTECHANGED || m == WM_PALETTEISCHANGING) && !screen_has_palette()) {
+        if (g_trace) tlog("mensaje de paleta %04x ignorado (pantalla sin paleta)", m);
+        return 0;
+    }
+    if (m == WM_NCDESTROY) RemovePropA(h, TR_PAL_PROP);
+    return orig ? CallWindowProcA(orig, h, m, w, l) : DefWindowProcA(h, m, w, l);
+}
+
+static void filter_palette_messages(HWND h) {
+    WNDPROC orig = (WNDPROC)GetWindowLongPtrA(h, GWLP_WNDPROC);
+    if (!orig || orig == palette_filter_proc || !SetPropA(h, TR_PAL_PROP, (HANDLE)orig)) return;
+    SetWindowLongPtrA(h, GWLP_WNDPROC, (LONG_PTR)palette_filter_proc);
+}
+
 static HWND WINAPI hk_CreateWindowExA(DWORD ex, LPCSTR cls, LPCSTR title, DWORD style, int x, int y, int w, int h,
                                       HWND parent, HMENU menu, HINSTANCE inst, LPVOID param) {
     HWND r = real_CreateWindowExA(ex, cls, title, style, x, y, w, h, parent, menu, inst, param);
+    if (r && !(style & WS_CHILD)) filter_palette_messages(r);
     if (g_trace) tlog("CreateWindowEx class=%s title=%s style=%lx %d,%d %dx%d parent=%p -> %p",
                       ((ULONG_PTR)cls >> 16) ? cls : "(atom)", title ? title : "", style, x, y, w, h, parent, r);
     if (r && !parent && !g_mainWnd && (style & WS_CHILD) == 0) g_mainWnd = r;
@@ -1139,6 +1260,9 @@ static Hook g_hooks[] = {
     { "USER32.DLL", "SetWindowPos", hk_SetWindowPos, (void **)&real_SetWindowPos },
     { "USER32.DLL", "MoveWindow", hk_MoveWindow, (void **)&real_MoveWindow },
     { "GDI32.DLL", "SetSystemPaletteUse", hk_SetSystemPaletteUse, (void **)&real_SetSystemPaletteUse },
+    { "GDI32.DLL", "GetSystemPaletteEntries", hk_GetSystemPaletteEntries, (void **)&real_GetSystemPaletteEntries },
+    { "GDI32.DLL", "RealizePalette", hk_RealizePalette, (void **)&real_RealizePalette },
+    { "GDI32.DLL", "GetDeviceCaps", hk_GetDeviceCaps, (void **)&real_GetDeviceCaps },
     { "GDI32.DLL", "BitBlt", hk_BitBlt, (void **)&real_BitBlt },
     { "GDI32.DLL", "StretchBlt", hk_StretchBlt, (void **)&real_StretchBlt },
     { "GDI32.DLL", "StretchDIBits", hk_StretchDIBits, (void **)&real_StretchDIBits },
@@ -1256,17 +1380,56 @@ static int patch_delay_import_any(HMODULE mod, const char *fn, void *hook) {
 }
 
 /*
+ * Reemplaza en la tabla de exportaciones de `mod` la dirección de `fn`: los
+ * módulos que se carguen después (y GetProcAddress) reciben el hook. Se usa
+ * cuando winmm.dll implementa las funciones directamente (Wine / Proton), sin
+ * stubs que salten por su IAT. En un proceso de 32 bits el RVA puede quedar
+ * "negativo" (hook debajo de la base): la suma base + RVA da la vuelta igual.
+ */
+static int patch_export(HMODULE mod, const char *fn, void *hook) {
+    BYTE *base = (BYTE *)mod;
+    IMAGE_NT_HEADERS *nt;
+    IMAGE_DATA_DIRECTORY *dir;
+    IMAGE_EXPORT_DIRECTORY *exp;
+    DWORD *names, *funcs, i;
+    WORD *ords;
+    if (!mod) return 0;
+    nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+    dir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    if (!dir->VirtualAddress) return 0;
+    exp = (IMAGE_EXPORT_DIRECTORY *)(base + dir->VirtualAddress);
+    names = (DWORD *)(base + exp->AddressOfNames);
+    ords = (WORD *)(base + exp->AddressOfNameOrdinals);
+    funcs = (DWORD *)(base + exp->AddressOfFunctions);
+    for (i = 0; i < exp->NumberOfNames; i++) {
+        DWORD old, *slot;
+        if (strcmp((const char *)(base + names[i]), fn) != 0) continue;
+        slot = &funcs[ords[i]];
+        if (!VirtualProtect(slot, sizeof *slot, PAGE_READWRITE, &old)) return 0;
+        *slot = (DWORD)((ULONG_PTR)hook - (ULONG_PTR)base);
+        VirtualProtect(slot, sizeof *slot, old, &old);
+        return 1;
+    }
+    return 0;
+}
+
+/*
  * Intercepta waveOutOpen para todo el proceso. En Windows 10 winmm.dll exporta
- * un stub que salta (vía import normal o diferida) a winmmbase.dll.
+ * un stub que salta (vía import normal o diferida) a winmmbase.dll. En Wine las
+ * funciones están en winmm.dll mismo: se parchea su tabla de exportaciones, así
+ * WSOUND32.DLL (que se carga después y abre el audio en su DllMain) usa el hook.
  */
 static void hook_winmm_fn(HMODULE winmm, HMODULE base, const char *name, void *hook, void **real) {
     void *orig = NULL;
     *real = base ? (void *)GetProcAddress(base, name) : NULL;
     if (patch_import_any(winmm, name, hook, &orig)) {
         if (!*real) *real = orig;
-    } else if (!*real || !patch_delay_import_any(winmm, name, hook)) {
-        tlog("aviso: no se pudo interceptar %s en winmm.dll", name);
+    } else if (*real && patch_delay_import_any(winmm, name, hook)) {
+        /* listo: import diferida hacia winmmbase.dll */
+    } else {
         *real = (void *)GetProcAddress(winmm, name);
+        if (*real && patch_export(winmm, name, hook)) tlog("%s interceptada en la tabla de exportaciones de winmm.dll", name);
+        else tlog("aviso: no se pudo interceptar %s en winmm.dll", name);
     }
 }
 

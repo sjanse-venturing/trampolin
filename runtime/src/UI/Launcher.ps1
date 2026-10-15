@@ -12,21 +12,29 @@ function Show-TrLauncher {
     $bottom = New-Object System.Windows.Forms.Panel
     $bottom.Dock = 'Bottom'; $bottom.Height = 56; $bottom.BackColor = [System.Drawing.Color]::FromArgb(238, 234, 226)
     $btnAdd = New-TrButton -Text 'Agregar juegos…' -Width 150; $btnAdd.Location = New-Object System.Drawing.Point(16, 11)
-    $btnOptions = New-TrButton -Text 'Opciones…' -Width 120; $btnOptions.Location = New-Object System.Drawing.Point(174, 11)
-    $btnHelp = New-TrButton -Text 'Ayuda' -Width 100; $btnHelp.Location = New-Object System.Drawing.Point(302, 11)
-    $btnLog = New-TrButton -Text 'Ver registro' -Width 120; $btnLog.Location = New-Object System.Drawing.Point(410, 11)
-    $lblStatus = New-TrLabel -Text '' -X 545 -Y 19 -Width 320 -Color $global:TrTheme.Muted
+    $btnSaves = New-TrButton -Text 'Partidas ▾' -Width 120; $btnSaves.Location = New-Object System.Drawing.Point(174, 11)
+    $btnOptions = New-TrButton -Text 'Opciones…' -Width 120; $btnOptions.Location = New-Object System.Drawing.Point(302, 11)
+    $btnHelp = New-TrButton -Text 'Ayuda' -Width 100; $btnHelp.Location = New-Object System.Drawing.Point(430, 11)
+    $btnLog = New-TrButton -Text 'Ver registro' -Width 120; $btnLog.Location = New-Object System.Drawing.Point(538, 11)
+    $lblStatus = New-TrLabel -Text '' -X 672 -Y 19 -Width 195 -Color $global:TrTheme.Muted
     $lblStatus.AutoEllipsis = $true; $lblStatus.Anchor = 'Left,Right,Top'
-    $bottom.Controls.AddRange(@($btnAdd, $btnOptions, $btnHelp, $btnLog, $lblStatus))
+    $bottom.Controls.AddRange(@($btnAdd, $btnSaves, $btnOptions, $btnHelp, $btnLog, $lblStatus))
     $form.Controls.AddRange(@($flow, $bottom, $header))
     $tip = New-Object System.Windows.Forms.ToolTip
 
     $menu = New-Object System.Windows.Forms.ContextMenuStrip
     $miRepair = $menu.Items.Add('Reparar')
     $miBackup = $menu.Items.Add('Copia de seguridad de las partidas')
+    $miImport = $menu.Items.Add('Importar partidas…')
     $miFolder = $menu.Items.Add('Abrir la carpeta del juego')
     [void]$menu.Items.Add('-')
     $miUninstall = $menu.Items.Add('Desinstalar…')
+
+    $savesMenu = New-Object System.Windows.Forms.ContextMenuStrip
+    $miExportAll = $savesMenu.Items.Add('Exportar todas las partidas…')
+    $miImportAll = $savesMenu.Items.Add('Importar partidas…')
+    [void]$savesMenu.Items.Add('-')
+    $miSavesFolder = $savesMenu.Items.Add('Abrir la carpeta de copias')
 
     $root = $Config.installRoot
 
@@ -141,6 +149,40 @@ function Show-TrLauncher {
             else { Show-TrInfo -Title 'No hay partidas' -Message 'Este juego todavía no tiene partidas guardadas.' -Owner $form }
         } catch { [void](Show-TrError $_ $form) }
     })
+    $importSaves = {
+        $dlg = New-Object System.Windows.Forms.OpenFileDialog
+        $dlg.Filter = 'Copias de partidas (*.zip)|*.zip'; $dlg.Title = 'Elegí la copia de partidas (.zip)'
+        if (Test-Path -LiteralPath (Get-TrSavesFolder)) { $dlg.InitialDirectory = Get-TrSavesFolder }
+        if ($dlg.ShowDialog($form) -ne 'OK') { return }
+        try { $content = Read-TrSavesZip -Zip $dlg.FileName } catch { [void](Show-TrError $_ $form); return }
+        $names = @(Get-TrCatalog | Where-Object { $content.Games.ContainsKey($_.id) } | ForEach-Object { $_.name }) -join ', '
+        if (-not (Show-TrConfirm -Title '¿Importar estas partidas?' -Message "Juegos: $names.`r`nLas partidas que tengas ahora de esos juegos se reemplazan (antes guardamos una copia en «Trampolín - partidas»)." -Yes 'Importar' -No 'Cancelar' -Owner $form)) { return }
+        try { $r = Import-TrSaves -Root $root -Zip $dlg.FileName } catch { [void](Show-TrError $_ $form); return }
+        $lines = @(foreach ($id in $r.Imported.Keys) { '✔ {0}: {1} archivo(s)' -f (Get-TrGame $id).name, @($r.Imported[$id]).Count })
+        $lines += @(foreach ($id in $r.Skipped.Keys) { '–  {0}: {1}' -f (Get-TrGame $id).name, $r.Skipped[$id] })
+        Show-TrInfo -Title $(if ($r.Imported.Count) { 'Partidas importadas' } else { 'No se importó nada' }) -Message ($lines -join "`r`n") -Owner $form
+    }
+    $miImport.Add_Click({ & $importSaves })
+    $miImportAll.Add_Click({ & $importSaves })
+    $miExportAll.Add_Click({
+        $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+        $dlg.Description = '¿Dónde guardar las partidas? (por ejemplo, un pendrive)'
+        $folder = Get-TrSavesFolder
+        New-Item -ItemType Directory -Force -Path $folder | Out-Null
+        $dlg.SelectedPath = $folder
+        if ($dlg.ShowDialog($form) -ne 'OK') { return }
+        try {
+            $zip = Export-TrAllSaves -Root $root -Destination $dlg.SelectedPath
+            if ($zip) { Show-TrInfo -Title 'Partidas exportadas' -Message "Todas las partidas quedaron en:`r`n$zip`r`n`r`nCopiá ese archivo a la otra computadora (o al Steam Deck) y usá «Importar partidas…»." -Owner $form }
+            else { Show-TrInfo -Title 'No hay partidas' -Message 'Ninguno de los juegos instalados tiene partidas guardadas.' -Owner $form }
+        } catch { [void](Show-TrError $_ $form) }
+    })
+    $miSavesFolder.Add_Click({
+        $folder = Get-TrSavesFolder
+        New-Item -ItemType Directory -Force -Path $folder | Out-Null
+        Start-Process explorer.exe -ArgumentList ('"{0}"' -f $folder)
+    })
+    $btnSaves.Add_Click({ $savesMenu.Show($btnSaves, (New-Object System.Drawing.Point(0, 0)), [System.Windows.Forms.ToolStripDropDownDirection]::AboveRight) })
     $miUninstall.Add_Click({
         $id = $menu.Tag; $name = (Get-TrGame $id).name
         if (-not (Show-TrConfirm -Title "¿Desinstalar «$name»?" -Message 'Se borrarán los archivos del juego de esta computadora. Antes guardaremos una copia de las partidas en Documentos.' -Yes 'Desinstalar' -No 'Cancelar' -Owner $form)) { return }

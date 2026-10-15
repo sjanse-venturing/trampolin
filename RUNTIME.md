@@ -1,9 +1,11 @@
-# RUNTIME — Ejecutar los Trampolín originales en Windows 10/11 x64, sin máquina virtual
+# RUNTIME — Ejecutar los Trampolín originales en Windows 10/11 x64 y en Linux / Steam Deck, sin máquina virtual
 
 > **Objetivo:** que los 8 juegos originales de la serie *Trampolín* (Anaya / Knowledge Adventure, 1995-1998) se instalen y ejecuten en Windows 10/11 de 64 bits **de forma nativa**, mediante un instalador con interfaz gráfica, sin VM, sin emulador de CPU y sin tocar el sistema más allá de lo imprescindible.
 >
 > **Producto final:** *Trampolín Runtime* =
 > `Trampolin.cmd` (doble clic) → asistente gráfico de instalación + lanzador de juegos con UI, manejo de errores amigable, log técnico, y el documento de usuario `LEEME-RUNTIME.md`.
+>
+> **Desde 2026-10-15 también en Linux / Steam Deck:** el mismo paquete trae `trampolin.sh`, un lanzador en Python + Tk que ejecuta los juegos con **Proton** usando las mismas piezas nativas (`trlaunch.exe`, `trhook.dll`, `WING32.DLL`). Las partidas se pueden **exportar e importar** entre Windows y el Steam Deck. Ver [§0.4](#04-linux--steam-deck-validado-el-2026-10-15) y [§15](#15-linux--steam-deck).
 
 ---
 
@@ -53,6 +55,33 @@
 - **Fallos del juego:** si el juego se cae (por ejemplo `0xC0000005`, TR-RUN-004), `trhook` registra siempre en `logs\juego-<ID>.log` las líneas `FALLO`: módulo + desplazamiento, dirección accedida, registros y cadena de llamadas aproximada. El lanzador las copia a *Ver detalles / Copiar informe*. `TRAMPOLIN_VIEW=1152x864` fija el tamaño de la vista escalada, para reproducir otras resoluciones.
 - **Diagnóstico:** definir `TRAMPOLIN_TRACE=1` registra en `logs\juego-<ID>.log` cada INI, archivo, ventana y llamada de audio. `TRAMPOLIN_WING_LOG=<archivo>` registra las llamadas de WinG.
 
+### 0.4 Linux / Steam Deck (validado el 2026-10-15)
+
+> Probado en un Steam Deck (SteamOS, Modo Escritorio, pantalla externa de 1920×1080) con las 8 ISOs de `archive.org/download/trampolin_anaya`. Los 8 juegos arrancan escalados a 4:3 con colores correctos usando **Proton 10.0**. Detalle técnico en [§15](#15-linux--steam-deck).
+
+| Juego | Proton 10.0 | Proton 11.0 / Experimental |
+|---|---|---|
+| Educación Infantil – Primeros Pasos (ACES) | ✅ | ✅ |
+| Educación Infantil – 1° Ciclo (ACES) | ✅ | (no probado) |
+| Educación Infantil – Primera Infancia (PEEWEE) | ✅ | ✅ |
+| Educación Infantil – 2° Ciclo (KA-MFC) | ✅ | ❌ pantalla negra |
+| Educación Primaria – 1° Ciclo (KA-MFC) | ✅ | ❌ pantalla negra |
+| Educación Primaria – 2° Ciclo (KA-MFC) | ✅ | ❌ pantalla negra |
+| Educación Primaria – 5° Curso (KA-MFC) | ✅ | ❌ pantalla negra |
+| Educación Primaria – 6° Curso (PEEWEE) | ✅ | ❌ pantalla negra |
+
+Validado automáticamente: instalación (CLI y asistente), arranque de cada juego, captura de pantalla, exportar/importar partidas, accesos de Steam (sobre una copia de `shortcuts.vdf`). **Falta validar a mano:** jugar con el trackpad y la pantalla táctil, el Modo Juego, crear un jugador y que el progreso pase de Windows al Deck, sonido y música.
+
+Causas encontradas al portar a Wine/Proton (todas corregidas en `trhook.dll`, que sigue siendo el mismo para Windows):
+
+| # | Síntoma en Proton | Causa | Corrección |
+|---|---|---|---|
+| 18 | FG/2G/KG/3G: pantalla negra y colgados | El hook de `waveOutOpen` (#2) parchea la IAT de `winmm.dll`; en Wine `winmm.dll` implementa las funciones directamente y no hay IAT que parchear, así que `WSOUND32.DLL` se bloquea en su `DllMain` | `trhook` además parchea la **tabla de exportaciones** de `winmm.dll`: las DLL que se cargan después (y `GetProcAddress`) reciben el hook. Funciona igual en Windows |
+| 19 | El juego no encuentra el CD | Proton reserva las unidades `S:` y `T:` (y borra esos enlaces de `dosdevices`) | En Linux el disco es la unidad `R:` |
+| 20 | Juegos que arman una "paleta identidad" con colores en negro | En color verdadero Windows informa una paleta del sistema (20 colores estáticos + la última paleta realizada); Wine devuelve 0 entradas y `NUMRESERVED = -1` | Paleta del sistema emulada en `GetSystemPaletteEntries` / `RealizePalette` y `NUMRESERVED = 20` cuando la pantalla no tiene paleta |
+| 21 | ACES: "Assertion failed: line 407 in file vgawin2" | Wine envía `WM_QUERYNEWPALETTE` / `WM_PALETTECHANGED` aunque la pantalla no tenga paleta; ACES los atiende con `assert(modo de 256 colores)` | `trhook` no le entrega esos mensajes a las ventanas principales si la pantalla no tiene paleta |
+| 22 | Con Proton 11.0 y Experimental, KA-MFC y 6° Curso quedan en negro (el juego sigue corriendo y suena) | Regresión de Wine posterior a Proton 10 (sin aislar) | El lanzador elige **Proton 10.0** si está instalado y avisa si no |
+
 ---
 
 ## Índice
@@ -71,6 +100,7 @@
 12. [Diagnóstico y resolución de problemas](#12-diagnóstico-y-resolución-de-problemas)
 13. [Riesgos y planes de contingencia](#13-riesgos-y-planes-de-contingencia)
 14. [Apéndices](#14-apéndices)
+15. [Linux / Steam Deck](#15-linux--steam-deck)
 
 ---
 
@@ -200,8 +230,12 @@ Trampolin/                         ← este proyecto
 │  │  ├─ trlaunch/                 ← trlaunch.exe: CreateProcess(SUSPENDED)+inyección
 │  │  └─ CMakeLists.txt
 │  ├─ tools/                       ← 7-Zip portable (7za.exe), DxWnd (si se redistribuye), ps2exe
-│  ├─ tests/                       ← Pester: tests de Core sin UI
-│  └─ build.ps1                    ← empaqueta dist\TrampolinRuntime-x.y.z.zip (+ .exe opcional)
+│  ├─ tests/                       ← Run-Tests.ps1 (Windows) y test_linux.py (Linux)
+│  ├─ build.ps1                    ← empaqueta dist\TrampolinRuntime-x.y.z.zip (+ .exe opcional)
+│  ├─ trampolin.sh                 ← punto de entrada en Linux / Steam Deck (§15)
+│  ├─ build.sh                     ← empaqueta desde Linux (mismo ZIP, con permisos de Unix)
+│  ├─ native/build.sh              ← compila los componentes nativos desde Linux con Zig (MinGW)
+│  └─ linux/                       ← lanzador de Linux: main.py + trampolin/{core,iso,proton,steam,icons,ui,errors}.py
 ```
 
 ### 3.2 Estructura instalada en la máquina del usuario
@@ -596,6 +630,7 @@ Variables: `{HD}`, `{CD}` (raíz de datos del CD: `E:` o `<inst>\cd\FG`), `{CDRO
 | `New-TrShortcut` | `WScript.Shell` COM → `.lnk` con ícono del exe original |
 | `Start-TrGame -Id` | Preparación + lanzamiento + espera + limpieza + diagnóstico |
 | `Repair-TrGame`, `Uninstall-TrGame`, `Backup-TrSaves` | Mantenimiento a partir de `manifest.json` |
+| `Get-TrSaveFiles`, `Export-TrAllSaves`, `Read-TrSavesZip`, `Import-TrSaves` | Partidas: exportar todas en un zip, importar desde un zip de Windows o de Linux (ver §15.6). Las mismas funciones existen en `linux/trampolin/core.py` |
 
 Todo lo de Core se puede testear con **Pester** sin UI (`tests\Core.Tests.ps1`), usando una ISO de prueba pequeña generada con `oscdimg`/`IMAPI2FS` y un `games.json` de prueba.
 
@@ -783,7 +818,18 @@ Para **cada** juego, empezando por FG (la familia KA-MFC cubre 4 de los 8 juegos
 
 Instalación limpia; instalación con ruta personalizada con espacios; ruta con `ñ` (tiene que dar el aviso `TR-DSK-003`); cancelar a mitad (rollback); sin espacio (simulado con un VHD pequeño); ISO renombrada; ISO truncada (`TR-ISO-002`); modo B con la ISO movida (`TR-RUN-002`); reparar después de borrar un archivo; desinstalar (no quedan restos salvo las partidas si el usuario elige conservarlas); ejecución como usuario estándar sin admin; Windows 11.
 
-### 11.3 Aceptación final
+### 11.3 Steam Deck (además de T1-T16)
+
+| Prueba | Qué verificar |
+|---|---|
+| D1 Modo Escritorio | `trampolin.sh` abre el asistente; instala los 8 juegos; la biblioteca los lanza |
+| D2 Steam | «Agregar a Steam» cierra y reabre Steam; aparecen «Biblioteca Trampolín» y los 8 juegos en la colección «Trampolín» |
+| D3 Modo Juego | Cada juego arranca desde Steam a pantalla completa; al salir del juego se vuelve a Steam |
+| D4 Controles | Trackpad derecho = mouse (clic al presionarlo); pantalla táctil = clic en el punto tocado; teclado en pantalla (Steam + X) para el nombre del jugador |
+| D5 Partidas | Exportar en Windows → importar en el Deck → el jugador aparece con su progreso; y al revés |
+| D6 Sonido | Voces y música (MIDI) se escuchan por los parlantes y por auriculares |
+
+### 11.4 Aceptación final
 
 - Un usuario sin conocimientos técnicos instala los 8 juegos solo con `LEEME-RUNTIME.md` en menos de 15 minutos.
 - Los 8 juegos pasan T1-T11 y T13-T15.
@@ -879,3 +925,98 @@ New-ItemProperty $k -Name 'C:\Trampolin\games\FG\FG.EXE' -Value '~ WIN98 256COLO
 # Lanzar con afinidad a 1 CPU
 $p = Start-Process -FilePath $exe -WorkingDirectory $hd -PassThru; $p.ProcessorAffinity = 1; $p.WaitForExit(); $p.ExitCode
 ```
+
+---
+
+## 15. Linux / Steam Deck
+
+### 15.1 Por qué un lanzador aparte
+
+El instalador y la biblioteca de Windows son Windows PowerShell 5.1 + WinForms, que no existen dentro de Proton/Wine. En Linux se usa un lanzador propio en **Python 3 + Tk** (los dos vienen con SteamOS; no hay que instalar nada) que **comparte** con Windows:
+
+- `src/data/games.json` (recetas) y `src/data/strings.es.json` (mensajes y errores);
+- `native/bin/trlaunch.exe`, `trhook.dll` y `WING32.DLL`, que corren dentro de Proton;
+- el formato de `manifest.json` y el de las copias de partidas.
+
+Cada función de `Trampolin.Core.psm1` tiene su par en `linux/trampolin/core.py` (`find_isos`, `install_game`, `write_game_config`, `backup_saves`, `export_all_saves`, `import_saves`…). Si se cambia una receta o una regla, hay que cambiar las dos.
+
+```
+runtime/
+├─ trampolin.sh               ← punto de entrada (python3 -I linux/main.py)
+└─ linux/
+   ├─ main.py                 ← argumentos: (nada) biblioteca/asistente · --install · --play <ID> · cli …
+   └─ trampolin/
+      ├─ core.py              ← catálogo, configuración, ISO→disco, INI (cp1252/CRLF), WSOUND32, partidas
+      ├─ iso.py               ← lector ISO9660/Joliet (port de TrIso.cs): no hace falta montar (requiere root)
+      ├─ proton.py            ← elegir Proton, prefijo, unidad R:, lanzar y diagnosticar
+      ├─ steam.py             ← shortcuts.vdf (binario) y accesos .desktop
+      ├─ icons.py             ← ícono del .exe → PNG (sin bibliotecas externas)
+      ├─ ui.py                ← asistente, biblioteca y diálogos (Tk), pensados para 1280×800
+      └─ errors.py            ← TrError + log, con el mismo catálogo que Windows
+```
+
+### 15.2 Instalación en disco
+
+| Qué | Dónde |
+|---|---|
+| Configuración | `~/.local/share/trampolin/config.json` (`installRoot`, `scale`, `proton`, …) |
+| Instalación (por defecto) | `~/Trampolin` — `app/` (copia del programa), `games/<ID>`, `cd/<ID>`, `logs/`, `manifest.json` |
+| Prefijo de Proton | `~/Trampolin/proton/pfx` (`STEAM_COMPAT_DATA_PATH=~/Trampolin/proton`) |
+| Copias de partidas | `~/Documents/Trampolín - partidas` (`xdg-user-dir DOCUMENTS`) |
+| Accesos | `~/.local/share/applications/trampolin-*.desktop` y `userdata/<usuario>/config/shortcuts.vdf` de Steam |
+
+- **Solo modo copia.** Montar una ISO requiere root en SteamOS, así que siempre se copia el disco completo a `cd/<ID>` (unos 2,5 GB los 8 juegos).
+- **Rutas que ven los juegos.** Dentro del prefijo, `C:\Trampolin\{games,cd,logs}` son enlaces a la instalación. Los juegos ven siempre rutas cortas y ANSI (`C:\Trampolin\games\FG\`), así que en Linux no hay límite de largo ni de caracteres para la carpeta elegida.
+- **Unidad de CD.** Antes de cada juego `pfx/dosdevices/r:` apunta a `cd/<ID>` y se definen `TRAMPOLIN_CDDRIVE=R` y `TRAMPOLIN_CDLABEL`; `trhook` informa esa unidad como CD con la etiqueta original. No se usa `T:` porque Proton la reserva (y `S:`).
+
+### 15.3 Lanzamiento
+
+```
+<Proton>/proton run <app>/native/bin/trlaunch.exe --wait --cwd C:\Trampolin\games\<ID> -- C:\Trampolin\games\<ID>\<EXE> <args>
+```
+
+- Variables: `STEAM_COMPAT_DATA_PATH`, `STEAM_COMPAT_CLIENT_INSTALL_PATH`, `WINEDLLOVERRIDES=wing32=n,b` (gana el `WING32.DLL` propio), `WINEDEBUG=-all` y las mismas `TRAMPOLIN_*` que en Windows, con rutas `C:\Trampolin\…`.
+- **Versión de Proton.** Se buscan `steamapps/common/Proton*` en todas las bibliotecas de Steam (también la tarjeta SD) y `compatibilitytools.d`. Se prefiere **Proton 10.0** (ver #22 en §0.4); si no está, la estable más nueva, y el asistente avisa. Se puede fijar otra en *Opciones…*.
+- **Diagnóstico al terminar.** Como en `Complete-TrGame`, salvo que en Linux el código de salida se trunca a 8 bits: 9001-9003 de `trlaunch` llegan como 41-43. Los fallos se detectan por las líneas `FALLO` del log del juego.
+- **Diagnóstico manual.** `TRAMPOLIN_TRACE=1` (traza de `trhook`, incluye las primeras copias a pantalla y las llamadas de paleta), `TRAMPOLIN_NOHOOK=1` (sin `trhook`), `TRAMPOLIN_WING32=builtin` (la WinG de Wine) y `WINEDEBUG=+…`. Ejemplo: `TRAMPOLIN_TRACE=1 ./trampolin.sh cli play FG`.
+- Un bloque opcional `"linux": { "nohook": true, "env": { … } }` por juego en `games.json` permite ajustes solo para Linux (Windows lo ignora). Hoy no hace falta en ningún juego.
+
+### 15.4 Steam
+
+- «Agregar a Steam» escribe accesos no-Steam para la biblioteca y cada juego (`Exe` = `<instalación>/app/trampolin.sh`, `LaunchOptions` = `--play <ID>`, sin herramienta de compatibilidad: el script maneja Proton). Todos quedan en la colección «Trampolín», con el ícono del juego.
+- El `appid` se calcula como Steam: `crc32(exe + nombre) | 0x80000000`. Los accesos propios se reconocen por el `Exe` (`…/trampolin.sh`) y se reemplazan sin duplicar; los demás accesos del usuario se conservan (se guarda `shortcuts.vdf.trampolin.bak` la primera vez).
+- Steam reescribe `shortcuts.vdf` al cerrarse, así que hay que escribirlo con Steam cerrado: el lanzador ofrece cerrarlo (`steam -shutdown`) y lo vuelve a abrir. Solo se puede hacer desde el Modo Escritorio.
+
+### 15.5 Línea de comandos (también para pruebas)
+
+```
+./trampolin.sh cli install --isos <carpeta> [--root <carpeta>] [--games FG,KG] [--scale 0|1|2]
+./trampolin.sh cli list | play <ID> | repair <ID> | uninstall <ID>
+./trampolin.sh cli export-saves [<ID> …] [--out <carpeta>]      # sin IDs: todas en un zip
+./trampolin.sh cli import-saves <zip>
+./trampolin.sh cli steam [--no-restart] | menu
+```
+
+### 15.6 Formato de las copias de partidas (Windows y Linux)
+
+| Tipo | Nombre | Contenido |
+|---|---|---|
+| De un juego | `<ID>-AAAAMMDD-HHMMSS.zip` | los archivos sueltos (`PLYR0001.INI`, `volumes.sav`…) + `trampolin-saves.json` |
+| De todos | `trampolin-partidas-AAAAMMDD-HHMMSS.zip` | `<ID>/<archivo>` + `trampolin-saves.json` |
+
+`trampolin-saves.json` = `{ "format": 1, "createdAt", "platform": "windows"|"linux", "games": [IDs] }`. Las copias anteriores (sin ese archivo) se reconocen por el nombre del zip.
+
+Al importar:
+
+1. Solo se aceptan nombres simples que coincidan con los patrones `saves` del juego en `games.json`, sin distinguir mayúsculas. Nunca se aceptan rutas, `..` ni `~~ka.swp`, y el resto se informa como ignorado.
+2. Por cada juego **instalado** del zip se guarda primero una copia de sus partidas actuales en «Trampolín - partidas». Después se borran sus archivos de partida (sin distinguir mayúsculas, para que en Linux no convivan `PLYR0001.INI` y `plyr0001.ini`) y se copian los del zip.
+3. Los juegos que no están instalados se saltean y se informan.
+4. No se importa con un juego abierto (`TR-RUN-001`). Un zip sin partidas reconocibles da `TR-SAV-001`.
+
+Los INI de configuración que forman parte de las partidas (`PRE_K.INI`, `4G.INI`) traen las rutas de la otra computadora, pero el lanzador los vuelve a escribir con las rutas correctas antes de cada juego.
+
+### 15.7 Compilar desde Linux
+
+`runtime/native/build.sh` compila `trhook.dll`, `WING32.DLL` y `trlaunch.exe` con el compilador cruzado de **Zig** (`x86-windows-gnu`, encabezados de MinGW), que se instala solo en un entorno de Python si no está (`pip install ziglang`). `runtime/build.sh` ejecuta las pruebas de Python y arma `dist/TrampolinRuntime-<versión>.zip` con `trampolin.sh` ejecutable. La compilación oficial sigue siendo `build.cmd` (MSVC) desde `build.ps1`.
+
+> El `trhook.dll` del repositorio se compiló con `native/build.sh` (Zig) para validar los cambios #18-#21 en el Steam Deck. `build.ps1` lo vuelve a compilar con MSVC; **hay que correr `build.ps1` y `tests\Run-Tests.ps1` en Windows** para confirmar que esos cambios no alteran el comportamiento en Windows.

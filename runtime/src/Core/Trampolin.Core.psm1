@@ -584,22 +584,167 @@ function Get-TrInstalledGames {
     }
 }
 
-function Backup-TrSaves {
-    <# Comprime las partidas de un juego en Documentos\Trampolín - partidas. Devuelve la ruta del zip (o $null). #>
+# ---------------------------------------------------------------------------
+# Partidas: copia de seguridad, exportación e importación
+# Mismo formato que la versión de Linux / Steam Deck (linux/trampolin/core.py):
+#   - de un juego:  <ID>-AAAAMMDD-HHMMSS.zip con los archivos sueltos
+#   - de todos:     trampolin-partidas-AAAAMMDD-HHMMSS.zip con <ID>/<archivo>
+#   - ambos llevan trampolin-saves.json ({ format, createdAt, platform, games })
+# ---------------------------------------------------------------------------
+
+$script:SavesManifest = 'trampolin-saves.json'
+
+function Get-TrSavesFolder { Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Trampolín - partidas' }
+
+function Test-TrSaveName {
+    <# ¿Es un nombre de archivo de partida de este juego? Solo nombres simples, sin rutas (sin distinguir mayúsculas). #>
+    param([Parameter(Mandatory)]$Game, [string]$Name)
+    if (-not $Name -or $Name -in @('.', '..') -or $Name.IndexOfAny([char[]]'\/:') -ge 0) { return $false }
+    if ($Name -ieq '~~ka.swp') { return $false }
+    foreach ($pat in @($Game.saves)) { if ($Name -like $pat) { return $true } }
+    $false
+}
+
+function Get-TrSaveFiles {
+    <# Archivos de partidas de un juego instalado. #>
     param([Parameter(Mandatory)][string]$Id, [Parameter(Mandatory)][string]$Root)
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
     $game = Get-TrGame $Id
     $hd = Join-Path $Root "games\$Id"
-    $files = @(foreach ($pat in @($game.saves)) { Get-ChildItem -LiteralPath $hd -Filter $pat -File -ErrorAction SilentlyContinue })
-    $files = @($files | Where-Object { $_.Name -notin @('~~ka.swp') } | Sort-Object FullName -Unique)
+    @(Get-ChildItem -LiteralPath $hd -File -ErrorAction SilentlyContinue | Where-Object { Test-TrSaveName $game $_.Name } | Sort-Object Name)
+}
+
+function New-TrSavesZip {
+    <# Crea un zip de partidas. $Entries: lista de @{ Path; Name } (Name puede ser '<ID>/<archivo>'). #>
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string[]]$GameIds, [Parameter(Mandatory)]$Entries)
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::Open($Path, 'Create')
+    try {
+        $meta = [ordered]@{ format = 1; createdAt = (Get-Date -Format s); platform = 'windows'; games = @($GameIds) } | ConvertTo-Json
+        $w = New-Object IO.StreamWriter($archive.CreateEntry($script:SavesManifest).Open(), (New-Object Text.UTF8Encoding($false)))
+        try { $w.Write($meta) } finally { $w.Dispose() }
+        foreach ($e in $Entries) { [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $e.Path, $e.Name) }
+    } finally { $archive.Dispose() }
+}
+
+function Get-TrUniquePath {
+    param([Parameter(Mandatory)][string]$Path)
+    $base = [IO.Path]::Combine([IO.Path]::GetDirectoryName($Path), [IO.Path]::GetFileNameWithoutExtension($Path))
+    $ext = [IO.Path]::GetExtension($Path)
+    for ($n = 2; Test-Path -LiteralPath $Path; $n++) { $Path = '{0}-{1}{2}' -f $base, $n, $ext }
+    $Path
+}
+
+function Backup-TrSaves {
+    <# Comprime las partidas de un juego en Documentos\Trampolín - partidas (o en $Destination). Devuelve la ruta del zip (o $null). #>
+    param([Parameter(Mandatory)][string]$Id, [Parameter(Mandatory)][string]$Root, [string]$Destination)
+    $files = @(Get-TrSaveFiles -Id $Id -Root $Root)
     if (-not $files.Count) { return $null }
-    $destDir = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Trampolín - partidas'
+    $destDir = $(if ($Destination) { $Destination } else { Get-TrSavesFolder })
     New-Item -ItemType Directory -Force -Path $destDir | Out-Null
-    $zip = Join-Path $destDir ('{0}-{1:yyyyMMdd-HHmmss}.zip' -f $Id, (Get-Date))
-    $archive = [IO.Compression.ZipFile]::Open($zip, 'Create')
-    try { foreach ($f in $files) { [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $f.FullName, $f.Name) } }
-    finally { $archive.Dispose() }
+    $zip = Get-TrUniquePath (Join-Path $destDir ('{0}-{1:yyyyMMdd-HHmmss}.zip' -f $Id, (Get-Date)))
+    New-TrSavesZip -Path $zip -GameIds @($Id) -Entries @($files | ForEach-Object { @{ Path = $_.FullName; Name = $_.Name } })
+    Write-TrLog Info "Copia de partidas de ${Id}: $zip"
     $zip
+}
+
+function Export-TrAllSaves {
+    <# Un solo zip con las partidas de todos los juegos instalados (<ID>/<archivo>). Devuelve la ruta o $null. #>
+    param([Parameter(Mandatory)][string]$Root, [string]$Destination)
+    $ids = @(); $entries = @()
+    foreach ($g in @(Get-TrInstalledGames -Root $Root)) {
+        $files = @(Get-TrSaveFiles -Id $g.Id -Root $Root)
+        if (-not $files.Count) { continue }
+        $ids += $g.Id
+        $entries += @($files | ForEach-Object { @{ Path = $_.FullName; Name = ('{0}/{1}' -f $g.Id, $_.Name) } })
+    }
+    if (-not $ids.Count) { return $null }
+    $destDir = $(if ($Destination) { $Destination } else { Get-TrSavesFolder })
+    New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+    $zip = Get-TrUniquePath (Join-Path $destDir ('trampolin-partidas-{0:yyyyMMdd-HHmmss}.zip' -f (Get-Date)))
+    New-TrSavesZip -Path $zip -GameIds $ids -Entries $entries
+    Write-TrLog Info "Exportación de todas las partidas: $zip"
+    $zip
+}
+
+function Find-TrGameId {
+    param([string]$Text)
+    $g = Get-TrCatalog | Where-Object { $_.id -ieq $Text } | Select-Object -First 1
+    if ($g) { $g.id } else { $null }
+}
+
+function Read-TrSavesZip {
+    <#
+      Analiza un zip de partidas (de Windows o de Linux). Devuelve @{ Games = @{ ID = @{ nombre = entrada } }; Ignored = @() }.
+      El ID de los archivos sueltos sale de trampolin-saves.json o del nombre del zip (<ID>-AAAAMMDD-HHMMSS.zip).
+    #>
+    param([Parameter(Mandatory)][string]$Zip)
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    try { $archive = [IO.Compression.ZipFile]::OpenRead($Zip) }
+    catch { throw (New-TrError 'TR-SAV-001' @{ file = [IO.Path]::GetFileName($Zip) } $_.Exception) }
+    try {
+        $flatId = $null
+        $metaEntry = $archive.Entries | Where-Object { $_.FullName -eq $script:SavesManifest } | Select-Object -First 1
+        if ($metaEntry) {
+            try {
+                $r = New-Object IO.StreamReader($metaEntry.Open(), [Text.Encoding]::UTF8)
+                try { $meta = $r.ReadToEnd() | ConvertFrom-Json } finally { $r.Dispose() }
+                $metaIds = @(@($meta.games) | ForEach-Object { Find-TrGameId $_ } | Where-Object { $_ })
+                if ($metaIds.Count -eq 1) { $flatId = $metaIds[0] }
+            } catch { Write-TrLog Warn "trampolin-saves.json ilegible en ${Zip}: $_" }
+        }
+        if (-not $flatId -and [IO.Path]::GetFileName($Zip) -match '^(.+?)-\d{8}-\d{6}(-\d+)?\.zip$') { $flatId = Find-TrGameId $Matches[1] }
+        $games = @{}; $ignored = @()
+        foreach ($e in $archive.Entries) {
+            $name = $e.FullName.Replace('\', '/')
+            if ($name.EndsWith('/') -or $name -eq $script:SavesManifest) { continue }
+            $parts = $name.Split('/')
+            $id = $null; $file = $name
+            if ($parts.Count -eq 1) { $id = $flatId; $file = $parts[0] }
+            elseif ($parts.Count -eq 2) { $id = Find-TrGameId $parts[0]; $file = $parts[1] }
+            if (-not $id -or -not (Test-TrSaveName (Get-TrGame $id) $file)) { $ignored += $name; continue }
+            if (-not $games.ContainsKey($id)) { $games[$id] = @{} }
+            if (@($games[$id].Keys | Where-Object { $_ -ieq $file }).Count) { $ignored += $name; continue }
+            $games[$id][$file] = $name
+        }
+    } finally { $archive.Dispose() }
+    if (-not $games.Count) { throw (New-TrError 'TR-SAV-001' @{ file = [IO.Path]::GetFileName($Zip) }) }
+    [pscustomobject]@{ Games = $games; Ignored = $ignored }
+}
+
+function Import-TrSaves {
+    <#
+      Importa partidas desde un zip. Para cada juego instalado que aparece en el zip guarda antes una copia
+      de las partidas actuales y las reemplaza. Devuelve @{ Imported = @{ ID = archivos }; Skipped = @{ ID = motivo }; Backups; Ignored }.
+    #>
+    param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)][string]$Zip, [string]$BackupDestination)
+    $content = Read-TrSavesZip -Zip $Zip
+    if (Get-TrRunningGame -Root $Root) { throw (New-TrError 'TR-RUN-001') }
+    $installed = @(Get-TrInstalledGames -Root $Root | Where-Object { $_.Healthy } | ForEach-Object { $_.Id })
+    $result = [pscustomobject]@{ Imported = [ordered]@{}; Skipped = [ordered]@{}; Backups = @(); Ignored = @($content.Ignored) }
+    Invoke-TrStep -Name "Importar partidas $([IO.Path]::GetFileName($Zip))" -ErrorCode 'TR-SAV-002' -ErrorData @{ file = [IO.Path]::GetFileName($Zip) } -Action {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $archive = [IO.Compression.ZipFile]::OpenRead($Zip)
+        try {
+            foreach ($g in @(Get-TrCatalog | Where-Object { $content.Games.ContainsKey($_.id) })) {
+                $id = $g.id
+                if ($installed -notcontains $id) { $result.Skipped[$id] = 'no está instalado'; continue }
+                $hd = Join-Path $Root "games\$id"
+                $b = Backup-TrSaves -Id $id -Root $Root -Destination $BackupDestination
+                if ($b) { $result.Backups += $b }
+                foreach ($f in @(Get-TrSaveFiles -Id $id -Root $Root)) { $f.IsReadOnly = $false; Remove-Item -LiteralPath $f.FullName -Force }
+                foreach ($file in $content.Games[$id].Keys) {
+                    $entry = $archive.GetEntry($content.Games[$id][$file])
+                    if (-not $entry) { $entry = $archive.Entries | Where-Object { $_.FullName.Replace('\', '/') -eq $content.Games[$id][$file] } | Select-Object -First 1 }
+                    $target = Join-Path $hd $file
+                    [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+                    (Get-Item -LiteralPath $target).LastWriteTime = $entry.LastWriteTime.DateTime
+                }
+                $result.Imported[$id] = @($content.Games[$id].Keys | Sort-Object)
+                Write-TrLog Info ("Partidas importadas en {0}: {1}" -f $id, ($result.Imported[$id] -join ', '))
+            }
+        } finally { $archive.Dispose() }
+    }
+    $result
 }
 
 function Uninstall-TrGame {
@@ -723,4 +868,5 @@ Export-ModuleMember -Function Get-TrAppRoot, Get-TrNativeBin, Get-TrCatalog, Get
     Get-TrDefaultInstallRoot, Get-TrManifest, Save-TrManifest, Test-TrPrerequisites, Find-TrIsos, Expand-TrZipIsos, Mount-TrIso, Dismount-TrIso,
     New-TrSubst, Remove-TrSubst, Test-TrInstallRoot, Format-TrSize, Get-TrRequiredBytes, Set-TrIniValues, Write-TrGameConfig, Repair-TrSectionSizes, Copy-TrFromIso,
     Get-TrCopySize, Install-TrRuntimeFiles, Install-TrGame, New-TrShortcuts, Remove-TrShortcuts, Get-TrInstalledGames, Backup-TrSaves,
+    Get-TrSavesFolder, Test-TrSaveName, Get-TrSaveFiles, Export-TrAllSaves, Read-TrSavesZip, Import-TrSaves,
     Uninstall-TrGame, Get-TrRunningGame, Start-TrGame, Complete-TrGame

@@ -7,6 +7,10 @@
   Pasos: compila los componentes nativos (MSVC x86), normaliza la codificación de
   los scripts (UTF-8 con BOM para Windows PowerShell 5.1), verifica la sintaxis,
   ejecuta las pruebas y genera dist\TrampolinRuntime-<versión>.zip.
+
+  El mismo ZIP sirve para Windows (Trampolin.cmd) y para Linux / Steam Deck
+  (trampolin.sh + linux\). Desde Linux, build.sh arma el mismo paquete y además
+  conserva el permiso de ejecución de trampolin.sh.
 #>
 param([switch]$SkipNative, [switch]$SkipTests, [string]$IsoFolder, [string]$Version = '1.0.0')
 
@@ -57,7 +61,9 @@ if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path (Join-Path $stage 'native\bin') | Out-Null
 Copy-Item (Join-Path $here 'src') $stage -Recurse
 Copy-Item (Join-Path $here 'native\bin\*') (Join-Path $stage 'native\bin')
-Copy-Item (Join-Path $here 'Trampolin.cmd'), (Join-Path $here 'LEEME-RUNTIME.md') $stage
+Copy-Item (Join-Path $here 'linux') $stage -Recurse
+Get-ChildItem (Join-Path $stage 'linux') -Recurse -Directory -Filter '__pycache__' | Remove-Item -Recurse -Force
+Copy-Item (Join-Path $here 'Trampolin.cmd'), (Join-Path $here 'trampolin.sh'), (Join-Path $here 'LEEME-RUNTIME.md') $stage
 $zip = Join-Path $dist "$name.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Add-Type -AssemblyName System.IO.Compression.FileSystem

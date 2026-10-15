@@ -3,6 +3,7 @@
     "TR-ENV-001": { "title": "Windows no compatible", "message": "Trampolín Runtime necesita Windows 10 u 11 de 64 bits.", "actions": [ "close" ] },
     "TR-ENV-002": { "title": "Falta un componente de Windows", "message": "Falta un componente de Windows ({component}). Instalalo desde Windows Update y volvé a intentar.", "actions": [ "close" ] },
     "TR-ENV-003": { "title": "Faltan archivos del programa", "message": "Faltan archivos de Trampolín Runtime ({file}). Volvé a descargar o descomprimir el programa completo.", "actions": [ "close" ] },
+    "TR-ENV-004": { "title": "Falta Proton", "message": "Para jugar en Linux o en el Steam Deck hace falta Proton. Instalalo desde Steam (Biblioteca → Herramientas → «Proton») y volvé a intentar.", "actions": [ "close" ] },
     "TR-ISO-001": { "title": "No encontramos los discos", "message": "No encontramos los discos de Trampolín en «{path}». Elegí la carpeta donde están los archivos .iso.", "actions": [ "browse" ] },
     "TR-ISO-002": { "title": "Disco no válido", "message": "El archivo «{file}» no parece un disco de Trampolín válido o está dañado.", "actions": [ "skip" ] },
     "TR-ISO-003": { "title": "No se pudo abrir el disco", "message": "No pudimos abrir el disco «{game}». Puede que otro programa lo esté usando o que Windows no permita abrir imágenes de disco.", "actions": [ "retry", "details" ] },
@@ -20,6 +21,8 @@
     "TR-RUN-004": { "title": "El juego tuvo un error", "message": "«{game}» tuvo un error interno y se cerró (código {code}).", "actions": [ "details" ] },
     "TR-RUN-005": { "title": "No se pudo iniciar", "message": "No se pudo iniciar «{game}». Es posible que un antivirus esté bloqueando la capa de compatibilidad.", "actions": [ "details" ] },
     "TR-RUN-006": { "title": "Juego no instalado", "message": "«{game}» no está instalado o su instalación está incompleta. Usá «Reparar» o volvé a instalarlo.", "actions": [ "repair" ] },
+    "TR-SAV-001": { "title": "No es una copia de partidas", "message": "El archivo «{file}» no contiene partidas de Trampolín. Elegí un .zip creado con «Copia de seguridad de las partidas» o «Exportar todas las partidas».", "actions": [ "close" ] },
+    "TR-SAV-002": { "title": "No se pudieron importar las partidas", "message": "No pudimos importar las partidas de «{file}». Las partidas que tenías quedaron guardadas en «Trampolín - partidas».", "actions": [ "retry", "details" ] },
     "TR-GEN-001": { "title": "Ocurrió un error inesperado", "message": "Ocurrió un error inesperado. No es tu culpa: copiá el informe y envialo a quien te ayude con la computadora.", "actions": [ "copy", "details" ] }
   },
   "actions": {

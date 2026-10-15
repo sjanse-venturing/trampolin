@@ -11,6 +11,10 @@ trampolin_anaya.zip
 # Datos de partidas que los juegos crean si se ejecutan desde el repositorio
 ~~ka.swp
 
+# Python (lanzador de Linux / Steam Deck)
+__pycache__/
+*.pyc
+
 # Sistema operativo y editores
 Thumbs.db
 desktop.ini
