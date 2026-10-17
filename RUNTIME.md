@@ -50,8 +50,8 @@
 
 ### 0.3 Cómo usarlo
 
-- **Usuario final:** descomprimir `runtime\dist\TrampolinRuntime-1.0.0.zip` y hacer doble clic en `Trampolin.cmd` (ver `runtime\LEEME-RUNTIME.md`).
-- **Desarrollo:** `runtime\native\build.cmd` (requiere Build Tools de VS con C++ x86) y `powershell -File runtime\build.ps1 -IsoFolder <carpeta de ISOs>` (compila, prueba y empaqueta).
+- **Usuario final:** descomprimir `runtime\dist\TrampolinRuntime-<versión>.zip` y hacer doble clic en `Trampolin.cmd` (Windows) o ejecutar `trampolin.sh` (Linux / Steam Deck) (ver `runtime\LEEME-RUNTIME.md`).
+- **Desarrollo:** `runtime\native\build.cmd` (requiere Build Tools de VS con C++ x86) y `powershell -File runtime\build.ps1 -IsoFolder <carpeta de ISOs>` (compila, prueba y empaqueta). La versión sale de `runtime\VERSION`.
 - **Fallos del juego:** si el juego se cae (por ejemplo `0xC0000005`, TR-RUN-004), `trhook` registra siempre en `logs\juego-<ID>.log` las líneas `FALLO`: módulo + desplazamiento, dirección accedida, registros y cadena de llamadas aproximada. El lanzador las copia a *Ver detalles / Copiar informe*. `TRAMPOLIN_VIEW=1152x864` fija el tamaño de la vista escalada, para reproducir otras resoluciones.
 - **Diagnóstico:** definir `TRAMPOLIN_TRACE=1` registra en `logs\juego-<ID>.log` cada INI, archivo, ventana y llamada de audio. `TRAMPOLIN_WING_LOG=<archivo>` registra las llamadas de WinG.
 
@@ -231,7 +231,7 @@ Trampolin/                         ← este proyecto
 │  │  └─ CMakeLists.txt
 │  ├─ tools/                       ← 7-Zip portable (7za.exe), DxWnd (si se redistribuye), ps2exe
 │  ├─ tests/                       ← Run-Tests.ps1 (Windows) y test_linux.py (Linux)
-│  ├─ build.ps1                    ← empaqueta dist\TrampolinRuntime-x.y.z.zip (+ .exe opcional)
+│  ├─ build.ps1                    ← empaqueta dist\TrampolinRuntime-x.y.z.zip (rutas con /, permisos de Unix)
 │  ├─ trampolin.sh                 ← punto de entrada en Linux / Steam Deck (§15)
 │  ├─ build.sh                     ← empaqueta desde Linux (mismo ZIP, con permisos de Unix)
 │  ├─ native/build.sh              ← compila los componentes nativos desde Linux con Zig (MinGW)
@@ -1019,4 +1019,6 @@ Los INI de configuración que forman parte de las partidas (`PRE_K.INI`, `4G.INI
 
 `runtime/native/build.sh` compila `trhook.dll`, `WING32.DLL` y `trlaunch.exe` con el compilador cruzado de **Zig** (`x86-windows-gnu`, encabezados de MinGW), que se instala solo en un entorno de Python si no está (`pip install ziglang`). `runtime/build.sh` ejecuta las pruebas de Python y arma `dist/TrampolinRuntime-<versión>.zip` con `trampolin.sh` ejecutable. La compilación oficial sigue siendo `build.cmd` (MSVC) desde `build.ps1`.
 
-> El `trhook.dll` del repositorio se compiló con `native/build.sh` (Zig) para validar los cambios #18-#21 en el Steam Deck. `build.ps1` lo vuelve a compilar con MSVC; **hay que correr `build.ps1` y `tests\Run-Tests.ps1` en Windows** para confirmar que esos cambios no alteran el comportamiento en Windows.
+Los dos empaquetadores (`build.ps1` y `build.sh`) generan el mismo ZIP: mismos archivos en el mismo orden, rutas con `/` y permisos de Unix (`trampolin.sh` ejecutable), así que el paquete armado en Windows se descomprime bien en el Steam Deck (Ark, file-roller, `unzip`) y viceversa. `build.ps1` falla si alguna ruta queda con `\` o si `trampolin.sh` no queda ejecutable. La versión por defecto de ambos sale de `runtime/VERSION`, y `.gitattributes` fija LF para `*.sh`/`*.py` y CRLF para `*.cmd`.
+
+> Los binarios de `native/bin` del repositorio son los de MSVC (1.0.9): `build.ps1` + `tests\Run-Tests.ps1` pasaron en Windows (17/17, con las ISOs) después de los cambios #18-#21, que se habían validado en el Steam Deck con la compilación de Zig.

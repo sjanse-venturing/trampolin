@@ -5,12 +5,13 @@
 #
 #   --native      recompila los componentes nativos con native/build.sh (Zig); si no, usa native/bin
 #   --skip-tests  no ejecuta las pruebas de Python
+#   --version     versión del paquete (por defecto, la del archivo VERSION)
 #
-# Genera dist/TrampolinRuntime-<versión>.zip, el mismo paquete que build.ps1, pero con
-# permisos de Unix (trampolin.sh queda ejecutable al descomprimir en Linux).
+# Genera dist/TrampolinRuntime-<versión>.zip, el mismo paquete que build.ps1
+# (rutas con / y permisos de Unix: trampolin.sh queda ejecutable al descomprimir en Linux).
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
-version=1.0.0
+version=$(tr -d '[:space:]' < "$here/VERSION")
 native=0
 tests=1
 while [ $# -gt 0 ]; do

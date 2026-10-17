@@ -9,13 +9,15 @@
   ejecuta las pruebas y genera dist\TrampolinRuntime-<versión>.zip.
 
   El mismo ZIP sirve para Windows (Trampolin.cmd) y para Linux / Steam Deck
-  (trampolin.sh + linux\). Desde Linux, build.sh arma el mismo paquete y además
-  conserva el permiso de ejecución de trampolin.sh.
+  (trampolin.sh + linux\): las rutas usan '/' y las entradas llevan permisos de
+  Unix (trampolin.sh ejecutable). Desde Linux, build.sh arma el mismo paquete.
+  La versión por defecto sale del archivo VERSION.
 #>
-param([switch]$SkipNative, [switch]$SkipTests, [string]$IsoFolder, [string]$Version = '1.0.0')
+param([switch]$SkipNative, [switch]$SkipTests, [string]$IsoFolder, [string]$Version)
 
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
+if (-not $Version) { $Version = (Get-Content (Join-Path $here 'VERSION') -TotalCount 1).Trim() }
 function Step([string]$t) { Write-Host "==> $t" -ForegroundColor Cyan }
 
 if (-not $SkipNative) {
@@ -58,14 +60,64 @@ $dist = Join-Path $here 'dist'
 $name = "TrampolinRuntime-$Version"
 $stage = Join-Path $dist $name
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-New-Item -ItemType Directory -Force -Path (Join-Path $stage 'native\bin') | Out-Null
-Copy-Item (Join-Path $here 'src') $stage -Recurse
-Copy-Item (Join-Path $here 'native\bin\*') (Join-Path $stage 'native\bin')
-Copy-Item (Join-Path $here 'linux') $stage -Recurse
-Get-ChildItem (Join-Path $stage 'linux') -Recurse -Directory -Filter '__pycache__' | Remove-Item -Recurse -Force
-Copy-Item (Join-Path $here 'Trampolin.cmd'), (Join-Path $here 'trampolin.sh'), (Join-Path $here 'LEEME-RUNTIME.md') $stage
+
+# Mismo contenido y mismo orden que build.sh.
+$files = @(foreach ($item in 'src', 'linux', 'native/bin', 'Trampolin.cmd', 'trampolin.sh', 'LEEME-RUNTIME.md') {
+    $p = Join-Path $here $item
+    $found = if (Test-Path $p -PathType Leaf) { Get-Item $p } else { Get-ChildItem $p -Recurse -File }
+    $list = [Collections.Generic.List[object]]::new()
+    foreach ($f in $found) {
+        if ($f.FullName -match '\\__pycache__\\' -or $f.Extension -in '.pyc', '.lib', '.exp', '.pdb') { continue }
+        $list.Add([pscustomobject]@{ File = $f; Rel = $f.FullName.Substring($here.Length + 1).Replace('\', '/') })
+    }
+    $list.Sort([Comparison[object]] { param($a, $b) [string]::CompareOrdinal($a.Rel, $b.Rel) })
+    $list
+})
+
+foreach ($f in $files) {
+    $dst = Join-Path $stage $f.Rel
+    New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
+    Copy-Item $f.File.FullName $dst
+}
+
+# El "version made by" del directorio central queda en Unix (3) para que unzip, bsdtar,
+# Ark, etc. respeten los permisos; Windows ignora ese byte.
+function Set-ZipUnixHost([string]$Path) {
+    $b = [IO.File]::ReadAllBytes($Path)
+    $eocd = -1
+    for ($i = $b.Length - 22; $i -ge [Math]::Max(0, $b.Length - 65557); $i--) {
+        if ([BitConverter]::ToUInt32($b, $i) -eq 0x06054b50) { $eocd = $i; break }
+    }
+    if ($eocd -lt 0) { throw "No se encontró el directorio central de $Path." }
+    $count = [BitConverter]::ToUInt16($b, $eocd + 10)
+    $pos = [int][BitConverter]::ToUInt32($b, $eocd + 16)
+    for ($n = 0; $n -lt $count; $n++) {
+        if ([BitConverter]::ToUInt32($b, $pos) -ne 0x02014b50) { throw "Directorio central inválido en $Path." }
+        $b[$pos + 5] = 3
+        $pos += 46 + [BitConverter]::ToUInt16($b, $pos + 28) + [BitConverter]::ToUInt16($b, $pos + 30) + [BitConverter]::ToUInt16($b, $pos + 32)
+    }
+    [IO.File]::WriteAllBytes($Path, $b)
+}
+
 $zip = Join-Path $dist "$name.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-[IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip, 'Optimal', $true)
-Step ("Listo: {0} ({1:N1} MB)" -f $zip, ((Get-Item $zip).Length / 1MB))
+Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+$archive = [IO.Compression.ZipFile]::Open($zip, 'Create')
+try {
+    foreach ($f in $files) {
+        $entry = [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $f.File.FullName, "$name/$($f.Rel)", 'Optimal')
+        $mode = if ($f.Rel.EndsWith('.sh')) { 0x81ED } else { 0x81A4 }   # 0100755 / 0100644
+        $entry.ExternalAttributes = $mode -shl 16
+    }
+} finally { $archive.Dispose() }
+Set-ZipUnixHost $zip
+
+# Verificación: rutas con '/' y trampolin.sh ejecutable.
+$archive = [IO.Compression.ZipFile]::OpenRead($zip)
+try {
+    $bad = @($archive.Entries | Where-Object { $_.FullName.Contains('\') })
+    if ($bad) { throw "El ZIP tiene rutas con '\': $($bad[0].FullName)" }
+    $sh = $archive.GetEntry("$name/trampolin.sh")
+    if (-not $sh -or (($sh.ExternalAttributes -shr 16) -band 0xFFFF) -ne 0x81ED) { throw 'trampolin.sh no quedó ejecutable en el ZIP.' }
+} finally { $archive.Dispose() }
+Step ("Listo: {0} ({1:N1} MB, {2} archivos)" -f $zip, ((Get-Item $zip).Length / 1MB), $files.Count)
