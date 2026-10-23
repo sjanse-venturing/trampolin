@@ -323,6 +323,14 @@ class SyncFolderTests(SyncTestBase):
         sync.before_play('4G', self.b, self.cfg_b)
         self.assertEqual(read(os.path.join(self.b, 'games', '4G', '4G.INI')), 'propio')
 
+    def test_suggested_folder(self):
+        home = os.path.join(self.t, 'home')
+        os.makedirs(home)
+        with mock.patch.object(os.path, 'expanduser', lambda p: p.replace('~', home)):
+            self.assertEqual(sync.suggested_folder(), (core.saves_dir(), ''))     # sin programas: la carpeta de partidas
+            os.makedirs(os.path.join(home, 'Sync'))
+            self.assertEqual(sync.suggested_folder(), (os.path.join(home, 'Sync'), 'Syncthing'))
+
     def test_folder_missing(self):
         cfg = {'sync': {'mode': 'folder', 'folder': os.path.join(self.t, 'no-existe')}}
         self.save(self.a, 'FG', 'PLYR0001.INI', '[P]\n', '2026-01-01T10:00:00Z')
@@ -534,6 +542,15 @@ class SyncDriveTests(SyncTestBase):
         with self.assertRaises(TrError) as c:
             sync.after_play('FG', self.a, self.cfg_a, d)
         self.assertEqual(c.exception.code, 'TR-SYN-001')
+
+    def test_client_from_ui(self):
+        with mock.patch.object(sync, 'CLIENT_FILE', os.path.join(self.t, 'google-client.json')), \
+                mock.patch.dict(os.environ, {'TRAMPOLIN_GOOGLE_CLIENT_ID': '', 'TRAMPOLIN_GOOGLE_CLIENT_SECRET': ''}):
+            self.assertIn('googleusercontent', sync.save_google_client('no-es-un-id', 'GOCSPX-abcdefghijkl'))
+            self.assertIsNotNone(sync.save_google_client('123-abc.apps.googleusercontent.com', 'corto'))
+            self.assertIsNone(sync.save_google_client(' 123-abc.apps.googleusercontent.com ', 'GOCSPX-abcdefghijkl'))
+            self.assertEqual(sync.google_settings()['clientId'], '123-abc.apps.googleusercontent.com')
+            self.assertTrue(sync.drive_available())
 
     def test_not_configured(self):
         d = sync.DriveBackend(sync.TokenStore(os.path.join(self.t, 't.json')), conf=dict(self.conf, clientId=''))

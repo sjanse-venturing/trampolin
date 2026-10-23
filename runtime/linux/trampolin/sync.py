@@ -29,6 +29,9 @@ from .errors import TrError, log
 
 STATE_FILE = os.path.join(core.CONFIG_DIR, 'sync-state.json')
 TOKEN_FILE = os.path.join(core.CONFIG_DIR, 'sync-token.json')
+CLIENT_FILE = os.path.join(core.CONFIG_DIR, 'google-client.json')
+GOOGLE_CONSOLE_URL = 'https://console.cloud.google.com/apis/library/drive.googleapis.com'
+DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata'
 FORMAT = 2
 MODES = ('off', 'folder', 'drive')
 
@@ -48,10 +51,29 @@ def limits():
 
 
 def google_settings():
+    """Cliente OAuth: variables de entorno > google-client.json del equipo (lo carga «Cómo habilitarlo…») > sync.json."""
     g = dict(settings()['google'])
-    g['clientId'] = os.environ.get('TRAMPOLIN_GOOGLE_CLIENT_ID') or g.get('clientId') or ''
-    g['clientSecret'] = os.environ.get('TRAMPOLIN_GOOGLE_CLIENT_SECRET') or g.get('clientSecret') or ''
+    local = core.read_json(CLIENT_FILE) or {}
+    if not isinstance(local, dict):
+        local = {}
+    g['clientId'] = os.environ.get('TRAMPOLIN_GOOGLE_CLIENT_ID') or local.get('clientId') or g.get('clientId') or ''
+    g['clientSecret'] = os.environ.get('TRAMPOLIN_GOOGLE_CLIENT_SECRET') or local.get('clientSecret') or g.get('clientSecret') or ''
     return g
+
+
+CLIENT_ID_RE = re.compile(r'^[0-9]+-[0-9a-z]+\.apps\.googleusercontent\.com$')
+
+
+def save_google_client(client_id, client_secret):
+    """Guarda el cliente OAuth pegado en la interfaz. Devuelve un mensaje si los datos no parecen válidos, o None."""
+    client_id, client_secret = (client_id or '').strip(), (client_secret or '').strip()
+    if not CLIENT_ID_RE.match(client_id):
+        return 'El ID de cliente tiene que terminar en «.apps.googleusercontent.com».'
+    if not re.match(r'^[A-Za-z0-9_-]{10,100}$', client_secret):
+        return 'Pegá el secreto del cliente completo (por ejemplo, «GOCSPX-…»).'
+    core.write_json(CLIENT_FILE, {'clientId': client_id, 'clientSecret': client_secret})
+    log('Info', 'Cliente OAuth de Google configurado en este equipo')
+    return None
 
 
 def drive_available():
@@ -77,6 +99,18 @@ def sync_config(cfg):
         s['deviceName'] = (socket.gethostname() or 'equipo')[:64]
     cfg['sync'] = s
     return s
+
+
+def suggested_folder():
+    """Carpeta para proponer en «Carpeta sincronizada»: la de un programa de sincronización (Syncthing,
+    Dropbox, Google Drive montado con rclone o GNOME) o, si no hay, la carpeta de partidas. Devuelve (ruta, origen)."""
+    home = os.path.expanduser('~')
+    for path, source in ((os.path.join(home, 'Sync'), 'Syncthing'), (os.path.join(home, 'Dropbox'), 'Dropbox'),
+                         (os.path.join(home, 'GoogleDrive'), 'Google Drive'), (os.path.join(home, 'Google Drive'), 'Google Drive'),
+                         (os.path.join(home, 'OneDrive'), 'OneDrive')):
+        if os.path.isdir(path):
+            return path, source
+    return core.saves_dir(), ''
 
 
 def enabled(cfg):

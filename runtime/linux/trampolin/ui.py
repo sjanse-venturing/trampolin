@@ -460,6 +460,62 @@ class LinkDialog(Dialog):
         self.close(None)
 
 
+class GoogleSetupDialog(Dialog):
+    """«Cómo habilitarlo…»: pasos cortos para crear el cliente OAuth y campos para pegarlo."""
+
+    STEPS = ('1.  Abrí Google Cloud, creá un proyecto y habilitá «Google Drive API».',
+             '2.  En «Pantalla de consentimiento de OAuth»: tipo Externo, agregá el permiso (copialo con el botón) y tocá «Publicar app».',
+             '3.  En «Credenciales» → «Crear credenciales» → «ID de cliente de OAuth», elegí «TVs y dispositivos de entrada limitada».',
+             '4.  Pegá acá abajo el ID y el secreto que te muestra Google.')
+
+    def __init__(self, owner, theme):
+        super().__init__(owner, theme, 760, 560)
+        self.result = False
+        label(self, 'Habilitar Google Drive', font=theme.big).pack(anchor='w', padx=22, pady=(16, 4))
+        label(self, 'Hay que registrar Trampolín en Google Cloud con tu cuenta (es gratis y se hace una sola vez):',
+              wrap=710).pack(anchor='w', padx=22)
+        for t in self.STEPS:
+            label(self, t, wrap=700).pack(anchor='w', padx=28, pady=3)
+        row = tk.Frame(self, bg=BACK)
+        row.pack(fill='x', padx=22, pady=10)
+        ttk.Button(row, text='Abrir Google Cloud', style='Primary.TButton',
+                   command=lambda: open_path(sync.GOOGLE_CONSOLE_URL)).pack(side='left')
+        self.btn_scope = ttk.Button(row, text='Copiar el permiso', command=self.copy_scope)
+        self.btn_scope.pack(side='left', padx=8)
+        ttk.Button(row, text='Ver la guía', command=self.guide).pack(side='left')
+        form = tk.Frame(self, bg=BACK)
+        form.pack(fill='x', padx=22, pady=(6, 0))
+        self.cid, self.secret = tk.StringVar(), tk.StringVar()
+        label(form, 'ID de cliente:').grid(row=0, column=0, sticky='w', pady=4)
+        ttk.Entry(form, textvariable=self.cid, width=58).grid(row=0, column=1, sticky='we', padx=8, ipady=3)
+        label(form, 'Secreto:').grid(row=1, column=0, sticky='w', pady=4)
+        ttk.Entry(form, textvariable=self.secret, width=58, show='•').grid(row=1, column=1, sticky='we', padx=8, ipady=3)
+        self.err = label(self, '', fg=BAD, wrap=700)
+        self.err.pack(anchor='w', padx=22, pady=4)
+        b = tk.Frame(self, bg=BACK)
+        b.pack(side='bottom', fill='x', padx=22, pady=16)
+        ttk.Button(b, text='Guardar', style='Primary.TButton', command=self.save).pack(side='right')
+        ttk.Button(b, text='Cancelar', command=self.close).pack(side='right', padx=8)
+
+    def copy_scope(self):
+        self.clipboard_clear()
+        self.clipboard_append(sync.DRIVE_SCOPE)
+        self.btn_scope.configure(text='Copiado ✓')
+
+    def guide(self):
+        for p in (os.path.join(core.APP_ROOT, 'LEEME-RUNTIME.md'), os.path.join(os.path.dirname(core.APP_ROOT), 'LEEME-RUNTIME.md')):
+            if os.path.exists(p):
+                open_path(p)
+                return
+
+    def save(self):
+        why = sync.save_google_client(self.cid.get(), self.secret.get())
+        if why:
+            self.err.configure(text=why)
+            return
+        self.close(True)
+
+
 class SyncDialog(Dialog):
     """«Sincronización…»: elegir el modo, vincular, probar y ver el estado de cada juego."""
 
@@ -479,11 +535,19 @@ class SyncDialog(Dialog):
                         value='folder', variable=self.mode, command=self.refresh).pack(anchor='w', pady=(4, 0))
         row = tk.Frame(modes, bg=BACK)
         row.pack(fill='x', padx=26, pady=2)
-        self.folder = tk.StringVar(value=s.get('folder') or '')
+        self.suggested, source = sync.suggested_folder()
+        self.folder = tk.StringVar(value=s.get('folder') or self.suggested)
         self.ent_folder = ttk.Entry(row, textvariable=self.folder)
         self.ent_folder.pack(side='left', fill='x', expand=True, ipady=3)
         self.btn_folder = ttk.Button(row, text='Examinar…', command=self.browse)
         self.btn_folder.pack(side='left', padx=6)
+        hint_text = ('Sugerida: la carpeta de %s de este equipo (usá la misma en los otros).' % source if source else
+                     'Sugerida: la carpeta de partidas de este equipo. Para sincronizar, elegí una que copie otro programa '
+                     '(Syncthing, Dropbox…) o un pendrive.')
+        self.lbl_hint = label(modes, '', fg=MUTED, font=theme.small, wrap=820)
+        self.lbl_hint.pack(anchor='w', padx=26)
+        self.folder.trace_add('write', lambda *a: self.lbl_hint.configure(text=hint_text if self.folder.get() == self.suggested else ''))
+        self.lbl_hint.configure(text=hint_text if self.folder.get() == self.suggested else '')
         self.rb_drive = ttk.Radiobutton(modes, text='Google Drive (iniciando sesión una vez con un código)', value='drive',
                                         variable=self.mode, command=self.refresh)
         self.rb_drive.pack(anchor='w', pady=(8, 0))
@@ -519,10 +583,11 @@ class SyncDialog(Dialog):
         self.ent_folder.configure(state='normal' if folder else 'disabled')
         self.btn_folder.configure(state='normal' if folder else 'disabled')
         email = self.drive.linked_email()
-        if not sync.drive_available():
-            self.lbl_drive.configure(text='No disponible en esta copia del programa (falta configurar el acceso a Google).')
-            self.rb_drive.state(['disabled'])
-            self.btn_link.state(['disabled'])
+        self.available = sync.drive_available()
+        self.rb_drive.state(['!disabled'] if self.available else ['disabled'])
+        if not self.available:
+            self.lbl_drive.configure(text='Falta habilitar el acceso a Google en este equipo (una sola vez).')
+            self.btn_link.configure(text='Cómo habilitarlo…')
         else:
             self.lbl_drive.configure(text='Vinculado con %s' % email if email else 'Sin vincular')
             self.btn_link.configure(text='Cambiar de cuenta…' if email else 'Vincular…')
@@ -538,6 +603,14 @@ class SyncDialog(Dialog):
             self.folder.set(d)
 
     def link(self):
+        if not self.available:
+            if GoogleSetupDialog(self, self.theme).run():
+                self.drive = sync.DriveBackend()
+                self.refresh()
+                if self.available:
+                    self.mode.set('drive')
+                    self.refresh()
+            return
         email = LinkDialog(self, self.theme, self.drive).run()
         if email:
             self.mode.set('drive')
@@ -555,6 +628,11 @@ class SyncDialog(Dialog):
     def apply(self):
         """Valida y guarda la configuración. Devuelve False si falta algo."""
         mode = self.mode.get()
+        if mode == 'folder' and self.folder.get() == self.suggested and not os.path.isdir(self.suggested):
+            try:
+                os.makedirs(self.suggested, exist_ok=True)     # la carpeta de partidas puede no existir todavía
+            except OSError:
+                pass
         if mode == 'folder' and not os.path.isdir(self.folder.get()):
             show_info(self, self.theme, 'Elegí la carpeta', 'Elegí una carpeta que exista (por ejemplo, la de Google Drive para escritorio).')
             return False

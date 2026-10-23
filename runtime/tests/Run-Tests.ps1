@@ -287,6 +287,11 @@ Test-Case 'Carpeta: un paquete inválido frena el juego pero no impide guardar' 
     Assert-True ((Sync-TrAfterPlay -Id 'FG' -Root $a -Config $c).Action -eq 'uploaded') 'no reemplazó el paquete inválido'
     Assert-True ((Sync-TrBeforePlay -Id 'FG' -Root $a -Config $c).Action -eq 'same') 'quedó distinto'
 }
+Test-Case 'Propone una carpeta para sincronizar (la de un programa de sincronización o la de partidas)' {
+    $sg = Get-TrSuggestedSyncFolder
+    Assert-True ($sg.Path) 'no propuso nada'
+    Assert-True (($sg.Source -and (Test-Path -LiteralPath $sg.Path)) -or (-not $sg.Source -and $sg.Path -eq (Get-TrSavesFolder))) "propuesta: $($sg.Path) ($($sg.Source))"
+}
 Test-Case 'Carpeta inexistente: TR-SYN-002 y queda pendiente' {
     $a = Join-Path $tmp 'syncC'
     $c = [ordered]@{ sync = [ordered]@{ mode = 'folder'; folder = (Join-Path $tmp 'no-existe'); deviceId = ('c' * 32); deviceName = 'PC' } }
@@ -396,6 +401,15 @@ Test-Case 'Google Drive: errores con su causa (reintentos, cuota, permiso vencid
     Assert-True ($info -and $info.Code -eq 'TR-SYN-001' -and $info.Message -like '*No se puede resolver*') "sin red: $($info.Code) $($info.Message)"
     $nc = @{}; foreach ($k in $googleConf.Keys) { $nc[$k] = $googleConf[$k] }; $nc.clientId = ''
     Assert-Throws { Start-TrDriveLink (New-TrDriveBackend -TokenPath (Join-Path $tmp 't.json') -Conf $nc) } 'TR-SYN-008'
+}
+
+Test-Case 'Google Drive: el cliente OAuth se puede cargar desde la interfaz' {
+    & $syncModule { param($p) $script:ClientFile = $p } (Join-Path $tmp 'google-client.json')
+    Assert-True ((Save-TrGoogleClient -ClientId 'no-es-un-id' -ClientSecret 'GOCSPX-abcdefghijkl') -like '*googleusercontent*') 'aceptó un ID inválido'
+    Assert-True ([bool](Save-TrGoogleClient -ClientId '123-abc.apps.googleusercontent.com' -ClientSecret 'corto')) 'aceptó un secreto inválido'
+    Assert-True ($null -eq (Save-TrGoogleClient -ClientId ' 123-abc.apps.googleusercontent.com ' -ClientSecret 'GOCSPX-abcdefghijkl')) 'no guardó'
+    Assert-True ((Get-TrGoogleSettings).clientId -eq '123-abc.apps.googleusercontent.com') 'no lo lee'
+    Assert-True (Test-TrDriveAvailable) 'no quedó disponible'
 }
 
 Write-Host 'Steam (accesos para Big Picture y Steam Link)'

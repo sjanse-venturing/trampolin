@@ -14,6 +14,9 @@ $script:SrcRoot = Split-Path -Parent $PSScriptRoot
 $script:ConfigDir = Join-Path $env:LOCALAPPDATA 'Trampolin'
 $script:StateFile = Join-Path $script:ConfigDir 'sync-state.json'
 $script:TokenFile = Join-Path $script:ConfigDir 'sync-token.json'
+$script:ClientFile = Join-Path $script:ConfigDir 'google-client.json'
+$script:GoogleConsoleUrl = 'https://console.cloud.google.com/apis/library/drive.googleapis.com'
+$script:DriveScope = 'https://www.googleapis.com/auth/drive.appdata'
 $script:Settings = $null
 $script:Format = 2
 $script:NoHash = '0' * 64
@@ -84,13 +87,39 @@ function Get-TrSyncSettings {
 function Get-TrSyncLimits { (Get-TrSyncSettings)['limits'] }
 
 function Get-TrGoogleSettings {
+    <# Cliente OAuth: variables de entorno > google-client.json del equipo (lo carga «Cómo habilitarlo…») > sync.json. #>
     $g = @{}
     $src = (Get-TrSyncSettings)['google']
     foreach ($k in $src.Keys) { $g[$k] = $src[$k] }
+    if (Test-Path -LiteralPath $script:ClientFile) {
+        try {
+            $local = ConvertFrom-TrJsonStrict ([IO.File]::ReadAllText($script:ClientFile, [Text.Encoding]::UTF8))
+            if ($local -is [Collections.IDictionary]) {
+                if ($local['clientId']) { $g.clientId = [string]$local['clientId'] }
+                if ($local['clientSecret']) { $g.clientSecret = [string]$local['clientSecret'] }
+            }
+        } catch { Write-TrLog Warn "google-client.json ilegible: $_" }
+    }
     if ($env:TRAMPOLIN_GOOGLE_CLIENT_ID) { $g.clientId = $env:TRAMPOLIN_GOOGLE_CLIENT_ID }
     if ($env:TRAMPOLIN_GOOGLE_CLIENT_SECRET) { $g.clientSecret = $env:TRAMPOLIN_GOOGLE_CLIENT_SECRET }
     $g
 }
+
+function Save-TrGoogleClient {
+    <# Guarda el cliente OAuth pegado en la interfaz. Devuelve un mensaje si los datos no parecen válidos, o $null. #>
+    param([string]$ClientId, [string]$ClientSecret)
+    $ClientId = ([string]$ClientId).Trim(); $ClientSecret = ([string]$ClientSecret).Trim()
+    if ($ClientId -cnotmatch '^[0-9]+-[0-9a-z]+\.apps\.googleusercontent\.com$') { return 'El ID de cliente tiene que terminar en «.apps.googleusercontent.com».' }
+    if ($ClientSecret -cnotmatch '^[A-Za-z0-9_-]{10,100}$') { return 'Pegá el secreto del cliente completo (por ejemplo, «GOCSPX-…»).' }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $script:ClientFile) | Out-Null
+    $tmp = "$($script:ClientFile).tmp"
+    [IO.File]::WriteAllText($tmp, (ConvertTo-TrJsonText @{ clientId = $ClientId; clientSecret = $ClientSecret }), (New-Object Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath $tmp -Destination $script:ClientFile -Force
+    Write-TrLog Info 'Cliente OAuth de Google configurado en este equipo'
+    $null
+}
+
+function Get-TrGoogleHelpInfo { @{ ConsoleUrl = $script:GoogleConsoleUrl; Scope = $script:DriveScope } }
 
 function Test-TrDriveAvailable { [bool](Get-TrGoogleSettings).clientId }
 
@@ -107,6 +136,26 @@ function Get-TrSyncConfig {
     if (-not $s.deviceName) { $s.deviceName = 'equipo' }
     $Config['sync'] = $s
     $s
+}
+
+function Get-TrSuggestedSyncFolder {
+    <#
+      Carpeta para proponer en «Carpeta sincronizada»: la de un programa de sincronización instalado
+      (Google Drive para escritorio, OneDrive, Dropbox) o, si no hay, la carpeta de partidas de Windows.
+      Devuelve @{ Path; Source }.
+    #>
+    $candidates = @()
+    foreach ($d in [IO.DriveInfo]::GetDrives()) {
+        try { if (-not $d.IsReady) { continue } } catch { continue }
+        foreach ($n in 'Mi unidad', 'My Drive') { $candidates += @{ Path = (Join-Path $d.RootDirectory.FullName $n); Source = 'Google Drive para escritorio' } }
+    }
+    foreach ($n in 'Mi unidad', 'My Drive', '') { $candidates += @{ Path = (Join-Path (Join-Path $env:USERPROFILE 'Google Drive') $n); Source = 'Google Drive para escritorio' } }
+    if ($env:OneDrive) { $candidates += @{ Path = $env:OneDrive; Source = 'OneDrive' } }
+    $candidates += @{ Path = (Join-Path $env:USERPROFILE 'Dropbox'); Source = 'Dropbox' }
+    foreach ($c in $candidates) {
+        if ($c.Path -and (Test-Path -LiteralPath $c.Path -PathType Container)) { return @{ Path = $c.Path.TrimEnd('\'); Source = $c.Source } }
+    }
+    @{ Path = (Get-TrSavesFolder); Source = '' }
 }
 
 function Test-TrSyncEnabled {
@@ -889,7 +938,7 @@ function Get-TrSyncStatus {
     }
 }
 
-Export-ModuleMember -Function ConvertTo-TrJsonText, Get-TrSyncSettings, Get-TrGoogleSettings, Test-TrDriveAvailable, Get-TrSyncConfig, Test-TrSyncEnabled,
+Export-ModuleMember -Function Get-TrSuggestedSyncFolder, Save-TrGoogleClient, Get-TrGoogleHelpInfo, ConvertTo-TrJsonText, Get-TrSyncSettings, Get-TrGoogleSettings, Test-TrDriveAvailable, Get-TrSyncConfig, Test-TrSyncEnabled,
     Get-TrSyncState, Format-TrSyncDate, ConvertFrom-TrSyncIso, ConvertTo-TrSyncIso, Get-TrBundleHash, Get-TrSha256, Test-TrSyncName, Get-TrSyncFiles,
     Get-TrSyncLocalInfo, New-TrSyncBundle, Test-TrSyncBundle, Install-TrSyncBundle, New-TrFolderBackend, New-TrDriveBackend, Get-TrSyncBackend,
     Invoke-TrHttp, Test-TrSyncBackend, Get-TrRemoteMeta, Receive-TrRemote, Send-TrRemote, Start-TrDriveLink, Get-TrDriveLinkResult, Get-TrDriveEmail,

@@ -104,12 +104,60 @@ function Show-TrDriveLinkDialog {
     $sync.Result
 }
 
+function Show-TrGoogleSetupDialog {
+    <# «Cómo habilitarlo…»: pasos cortos para crear el cliente OAuth y campos para pegarlo. Devuelve $true si se guardó. #>
+    param($Owner = $null)
+    $help = Get-TrGoogleHelpInfo
+    $f = New-TrForm -Title 'Habilitar Google Drive' -Width 640 -Height 470
+    $f.Controls.Add((New-TrLabel -Text 'Habilitar Google Drive' -X 20 -Y 14 -Font $global:TrTheme.FontBig))
+    $f.Controls.Add((New-TrLabel -Text 'Hay que registrar Trampolín en Google Cloud con tu cuenta (es gratis y se hace una sola vez):' -X 20 -Y 46 -Width 600 -Height 22))
+    $steps = @(
+        '1.  Abrí Google Cloud, creá un proyecto y habilitá «Google Drive API».',
+        '2.  En «Pantalla de consentimiento de OAuth»: tipo Externo, agregá el permiso (copialo con el botón) y tocá «Publicar app».',
+        '3.  En «Credenciales» → «Crear credenciales» → «ID de cliente de OAuth», elegí «TVs y dispositivos de entrada limitada».',
+        '4.  Pegá acá abajo el ID y el secreto que te muestra Google.'
+    )
+    $y = 76
+    foreach ($t in $steps) {
+        $h = 22 + (Get-TrExtraHeight -Text $t -Width 600 -Height 22)
+        $f.Controls.Add((New-TrLabel -Text $t -X 20 -Y $y -Width 600 -Height $h)); $y += $h + 6
+    }
+    $btnConsole = New-TrButton -Text 'Abrir Google Cloud' -Width 170 -Primary; $btnConsole.Location = New-Object System.Drawing.Point(20, 250)
+    $btnScope = New-TrButton -Text 'Copiar el permiso' -Width 160; $btnScope.Location = New-Object System.Drawing.Point(198, 250)
+    $btnMore = New-TrButton -Text 'Ver la guía' -Width 120; $btnMore.Location = New-Object System.Drawing.Point(366, 250)
+    $f.Controls.Add((New-TrLabel -Text 'ID de cliente:' -X 20 -Y 306))
+    $txtId = New-Object System.Windows.Forms.TextBox; $txtId.Location = New-Object System.Drawing.Point(140, 303); $txtId.Width = 480
+    $f.Controls.Add((New-TrLabel -Text 'Secreto:' -X 20 -Y 342))
+    $txtSecret = New-Object System.Windows.Forms.TextBox; $txtSecret.Location = New-Object System.Drawing.Point(140, 339); $txtSecret.Width = 480; $txtSecret.UseSystemPasswordChar = $true
+    $lblErr = New-TrLabel -Text '' -X 140 -Y 368 -Width 480 -Color $global:TrTheme.Bad
+    $btnCancel = New-TrButton -Text 'Cancelar' -Width 110; $btnCancel.Location = New-Object System.Drawing.Point(380, 414); $btnCancel.DialogResult = 'Cancel'
+    $btnSave = New-TrButton -Text 'Guardar' -Width 120 -Primary; $btnSave.Location = New-Object System.Drawing.Point(500, 414)
+    $f.Controls.AddRange(@($btnConsole, $btnScope, $btnMore, $txtId, $txtSecret, $lblErr, $btnCancel, $btnSave))
+    $f.CancelButton = $btnCancel
+    $tip = New-Object System.Windows.Forms.ToolTip
+    $tip.SetToolTip($btnScope, $help.Scope)
+    $btnConsole.Add_Click({ Start-Process $help.ConsoleUrl })
+    $btnScope.Add_Click({ [System.Windows.Forms.Clipboard]::SetText($help.Scope); $btnScope.Text = 'Copiado ✓' })
+    $btnMore.Add_Click({
+        $doc = @((Join-Path (Get-TrAppRoot) 'LEEME-RUNTIME.md'), (Join-Path (Split-Path -Parent (Get-TrAppRoot)) 'LEEME-RUNTIME.md')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        if ($doc) { Start-Process notepad.exe -ArgumentList ('"{0}"' -f $doc) }
+    })
+    $btnSave.Add_Click({
+        $err = Save-TrGoogleClient -ClientId $txtId.Text -ClientSecret $txtSecret.Text
+        if ($err) { $lblErr.Text = $err; return }
+        $f.DialogResult = 'OK'; $f.Close()
+    })
+    $r = $f.ShowDialog($Owner)
+    $tip.Dispose(); $f.Dispose()
+    $r -eq 'OK'
+}
+
 function Show-TrSyncDialog {
     <# «Sincronización…»: elegir el modo, vincular, probar y ver el estado de cada juego. Devuelve $true si se guardó. #>
     param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)][string]$Root, $Owner = $null)
     $s = Get-TrSyncConfig $Config
     $drive = New-TrDriveBackend
-    $state = @{ saved = $false }
+    $state = @{ saved = $false; available = $false }
     $f = New-TrForm -Title 'Sincronización de partidas' -Width 820 -Height 640
     $f.Controls.Add((New-TrLabel -Text 'Sincronización de partidas' -X 20 -Y 14 -Font $global:TrTheme.FontBig))
     $f.Controls.Add((New-TrLabel -Text 'Cuando está activada, al abrir un juego se usa la partida más reciente de todos tus equipos (Windows, Linux o Steam Deck), y al cerrarlo se guarda la tuya.' -X 20 -Y 44 -Width 780 -Height 40))
@@ -117,6 +165,16 @@ function Show-TrSyncDialog {
     $rbFolder = New-Object System.Windows.Forms.RadioButton; $rbFolder.Text = 'Carpeta sincronizada (Google Drive para escritorio, OneDrive, Dropbox, Syncthing, pendrive…)'
     $rbFolder.Location = New-Object System.Drawing.Point(20, 122); $rbFolder.Width = 780
     $txtFolder = New-Object System.Windows.Forms.TextBox; $txtFolder.Location = New-Object System.Drawing.Point(44, 154); $txtFolder.Width = 590; $txtFolder.Text = [string]$s.folder
+    $suggested = Get-TrSuggestedSyncFolder
+    if (-not $txtFolder.Text) { $txtFolder.Text = $suggested.Path }
+    $lblFolderHint = New-TrLabel -Text '' -X 44 -Y 178 -Width 740 -Height 18 -Font $global:TrTheme.FontSmall -Color $global:TrTheme.Muted
+    $folderHint = {
+        $lblFolderHint.Text = $(if ($txtFolder.Text -ne $suggested.Path) { '' }
+            elseif ($suggested.Source) { "Sugerida: la carpeta de $($suggested.Source) de este equipo (usá la misma cuenta en los otros)." }
+            else { 'Sugerida: la carpeta de partidas de este equipo. Para sincronizar, elegí una que copie otro programa (Google Drive, OneDrive, Syncthing…) o un pendrive.' })
+    }
+    $txtFolder.Add_TextChanged({ & $folderHint })
+    & $folderHint
     $btnFolder = New-TrButton -Text 'Examinar…' -Width 140; $btnFolder.Location = New-Object System.Drawing.Point(642, 150)
     $rbDrive = New-Object System.Windows.Forms.RadioButton; $rbDrive.Text = 'Google Drive (iniciando sesión una vez con un código)'
     $rbDrive.Location = New-Object System.Drawing.Point(20, 196); $rbDrive.Width = 780
@@ -133,16 +191,18 @@ function Show-TrSyncDialog {
     $btnNow = New-TrButton -Text 'Sincronizar ahora' -Width 160; $btnNow.Location = New-Object System.Drawing.Point(178, 586)
     $btnCancel = New-TrButton -Text 'Cancelar' -Width 110; $btnCancel.Location = New-Object System.Drawing.Point(560, 586); $btnCancel.DialogResult = 'Cancel'
     $btnSave = New-TrButton -Text 'Guardar' -Width 120 -Primary; $btnSave.Location = New-Object System.Drawing.Point(680, 586)
-    $f.Controls.AddRange(@($rbOff, $rbFolder, $txtFolder, $btnFolder, $rbDrive, $lblDrive, $btnLink, $btnUnlink, $txtDevice, $lv, $btnTest, $btnNow, $btnCancel, $btnSave))
+    $f.Controls.AddRange(@($rbOff, $rbFolder, $txtFolder, $lblFolderHint, $btnFolder, $rbDrive, $lblDrive, $btnLink, $btnUnlink, $txtDevice, $lv, $btnTest, $btnNow, $btnCancel, $btnSave))
     $f.CancelButton = $btnCancel
     switch ($s.mode) { 'folder' { $rbFolder.Checked = $true } 'drive' { $rbDrive.Checked = $true } default { $rbOff.Checked = $true } }
 
     $refresh = {
         $txtFolder.Enabled = $rbFolder.Checked; $btnFolder.Enabled = $rbFolder.Checked
         $email = Get-TrDriveEmail $drive
-        if (-not (Test-TrDriveAvailable)) {
-            $lblDrive.Text = 'No disponible en esta copia del programa (falta configurar el acceso a Google).'
-            $rbDrive.Enabled = $false; $btnLink.Enabled = $false
+        $state.available = Test-TrDriveAvailable
+        $rbDrive.Enabled = $state.available
+        if (-not $state.available) {
+            $lblDrive.Text = 'Falta habilitar el acceso a Google en este equipo (una sola vez).'
+            $btnLink.Text = 'Cómo habilitarlo…'
         } else {
             $lblDrive.Text = $(if ($email) { "Vinculado con $email" } else { 'Sin vincular' })
             $btnLink.Text = $(if ($email) { 'Cambiar de cuenta…' } else { 'Vincular…' })
@@ -161,6 +221,9 @@ function Show-TrSyncDialog {
     $apply = {
         # Valida y guarda la configuración. Devuelve $false si falta algo.
         $mode = $(if ($rbFolder.Checked) { 'folder' } elseif ($rbDrive.Checked) { 'drive' } else { 'off' })
+        if ($mode -eq 'folder' -and $txtFolder.Text -eq $suggested.Path -and -not (Test-Path -LiteralPath $txtFolder.Text)) {
+            New-Item -ItemType Directory -Force -Path $txtFolder.Text -ErrorAction SilentlyContinue | Out-Null   # la carpeta de partidas puede no existir todavía
+        }
         if ($mode -eq 'folder' -and -not ($txtFolder.Text -and (Test-Path -LiteralPath $txtFolder.Text -PathType Container))) {
             Show-TrInfo -Title 'Elegí la carpeta' -Message 'Elegí una carpeta que exista (por ejemplo, la de Google Drive para escritorio).' -Owner $f; return $false
         }
@@ -183,6 +246,10 @@ function Show-TrSyncDialog {
         if ($dlg.ShowDialog($f) -eq 'OK') { $txtFolder.Text = $dlg.SelectedPath }
     })
     $btnLink.Add_Click({
+        if (-not $state.available) {
+            if (Show-TrGoogleSetupDialog -Owner $f) { & $refresh; if ($state.available) { $rbDrive.Checked = $true } }
+            return
+        }
         $email = Show-TrDriveLinkDialog -Owner $f
         if ($email) {
             $rbDrive.Checked = $true

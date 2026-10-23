@@ -109,7 +109,7 @@ Se configura en la Biblioteca Trampolín → **Sincronización…**, en cada equ
 
 Elegí una carpeta que ya se copie sola entre tus equipos: la de **Google Drive para escritorio** (*Mi unidad*), **OneDrive**, **Dropbox**, **Syncthing**, una carpeta de red o incluso un **pendrive** que lleves de un equipo al otro. Trampolín guarda ahí una subcarpeta `Trampolin-sync` con un archivo por juego. Trampolín no se conecta a internet: de eso se encarga el programa de sincronización.
 
-1. **Sincronización…** → **Carpeta sincronizada** → **Examinar…** y elegí la carpeta.
+1. **Sincronización…** → **Carpeta sincronizada**. Trampolín ya propone una: la de Google Drive para escritorio, OneDrive o Dropbox si los encuentra (en el Steam Deck, la de Syncthing, `~/Sync`), o si no la carpeta de partidas del equipo. Si querés otra, usá **Examinar…**.
 2. Presioná **Probar conexión** y después **Guardar**.
 3. Repetí lo mismo en los otros equipos, eligiendo la misma carpeta sincronizada.
 
@@ -129,7 +129,14 @@ Trampolín se conecta directamente con tu cuenta de Google. Las partidas se guar
 
 Para dejar de usarla: **Sincronización…** → **Desvincular**. No se borra nada.
 
-> Si tu copia de Trampolín dice «No disponible» en Google Drive, falta configurar el acceso a Google en el programa (lo hace quien lo armó). Mientras tanto, usá la opción A.
+> **Si dice «Falta habilitar el acceso a Google»:** hay que registrar Trampolín en Google Cloud una sola vez (es gratis). Tocá **Cómo habilitarlo…**: la ventana tiene los pasos, un botón para abrir Google Cloud y otro para copiar el permiso. Al final pegás el *ID de cliente* y el *secreto* y presionás *Guardar*. En resumen:
+>
+> 1. En Google Cloud, creá un proyecto y habilitá **Google Drive API**.
+> 2. En **Pantalla de consentimiento de OAuth**: tipo *Externo*, agregá el permiso `https://www.googleapis.com/auth/drive.appdata` y tocá **Publicar app** (si queda «en prueba», el permiso vence a los 7 días).
+> 3. En **Credenciales** → **Crear credenciales** → **ID de cliente de OAuth**, elegí **TVs y dispositivos de entrada limitada**.
+> 4. Pegá el ID y el secreto en Trampolín. En los otros equipos podés usar los mismos.
+>
+> Mientras tanto podés usar la opción A.
 
 ### Cómo funciona
 

@@ -1123,7 +1123,7 @@ Se compara `updatedAt` entre equipos, así que importa que los relojes estén ra
 3. *Credenciales* → *Crear ID de cliente de OAuth* → tipo **TVs and Limited Input devices**.
 4. Copiar `client_id` y `client_secret` a `src/data/sync.json` (`google.clientId` / `google.clientSecret`) y volver a empaquetar. Para este tipo de cliente Google no considera secreto el `client_secret`. Para probar sin reempaquetar sirven las variables `TRAMPOLIN_GOOGLE_CLIENT_ID` / `TRAMPOLIN_GOOGLE_CLIENT_SECRET`.
 
-Sin `clientId`, la opción Google Drive aparece deshabilitada («No disponible en esta copia del programa») y el modo carpeta sigue funcionando.
+Sin `clientId`, la opción Google Drive aparece deshabilitada («Falta habilitar el acceso a Google en este equipo») y el botón *Vincular…* pasa a ser **Cómo habilitarlo…**. Ese diálogo (`Show-TrGoogleSetupDialog` / `GoogleSetupDialog`) muestra los pasos 1-3 resumidos, con botones para abrir la consola (`console.cloud.google.com/apis/library/drive.googleapis.com`) y copiar el scope, y campos para pegar el ID y el secreto. Se validan (`*.apps.googleusercontent.com`) y se guardan en `google-client.json`, en la carpeta de configuración del equipo (`Save-TrGoogleClient` / `save_google_client`). Prioridad: variables de entorno > `google-client.json` > `sync.json`. El modo carpeta sigue funcionando sin nada de esto.
 
 ### 16.7 Pruebas
 
