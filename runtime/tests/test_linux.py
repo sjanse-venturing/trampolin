@@ -2,19 +2,26 @@
 # Uso:  python3 -m unittest discover -s runtime/tests -p 'test_*.py'
 # Con TRAMPOLIN_ISOS=<carpeta con las .iso> se prueban también las imágenes reales.
 
+import base64
+import hashlib
+import http.server
+import io
 import json
 import os
 import re
 import struct
 import sys
 import tempfile
+import threading
 import unittest
+import urllib.parse
 import zipfile
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'linux'))
 
-from trampolin import core, errors, proton, steam  # noqa: E402
+from trampolin import core, errors, proton, steam, sync  # noqa: E402
 from trampolin.errors import TrError  # noqa: E402
 from trampolin.iso import Iso  # noqa: E402
 
@@ -189,6 +196,352 @@ class SavesTests(unittest.TestCase):
         self.assertEqual(c.exception.code, 'TR-SAV-001')
 
 
+def set_mtime(path, iso):
+    t = sync.from_iso(iso)
+    os.utime(path, (t, t))
+
+
+def make_zip(entries, manifest=None):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+        if manifest is not None:
+            z.writestr('trampolin-saves.json', json.dumps(manifest))
+        for n, body in entries.items():
+            z.writestr(n, body)
+    return buf.getvalue()
+
+
+def manifest_for(gid, entries, updated='2026-01-01T10:00:00Z', **over):
+    files = [{'name': n, 'size': len(b), 'sha256': hashlib.sha256(b).hexdigest(), 'mtime': updated} for n, b in entries.items()]
+    m = {'format': 2, 'createdAt': updated, 'platform': 'windows', 'games': [gid], 'gameId': gid, 'updatedAt': updated,
+         'deviceId': 'abc', 'deviceName': 'PC', 'bundleHash': sync.bundle_hash(files), 'files': files}
+    m.update(over)
+    return m
+
+
+class SyncTestBase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.t = self.tmp.name
+        self.patches = [mock.patch.object(sync, 'STATE_FILE', os.path.join(self.t, 'state-a.json')),
+                        mock.patch.object(core, 'saves_dir', lambda: os.path.join(self.t, 'copias'))]
+        for p in self.patches:
+            p.start()
+        self.a = os.path.join(self.t, 'a')
+        self.b = os.path.join(self.t, 'b')
+        fake_install(self.a, ['FG', '4G'])
+        fake_install(self.b, ['FG', '4G'])
+        self.cloud = os.path.join(self.t, 'nube')
+        os.makedirs(self.cloud)
+        self.cfg_a = {'sync': {'mode': 'folder', 'folder': self.cloud, 'deviceId': 'a' * 32, 'deviceName': 'PC'}}
+        self.cfg_b = {'sync': {'mode': 'folder', 'folder': self.cloud, 'deviceId': 'b' * 32, 'deviceName': 'Deck'}}
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def as_device(self, name):
+        """Cada «equipo» tiene su propio sync-state.json."""
+        sync.STATE_FILE = os.path.join(self.t, 'state-%s.json' % name)
+
+    def save(self, root, gid, name, text, when):
+        p = os.path.join(root, 'games', gid, name)
+        write(p, text)
+        set_mtime(p, when)
+        return p
+
+
+class SyncFolderTests(SyncTestBase):
+    def test_roundtrip_newest_wins(self):
+        self.as_device('a')
+        self.save(self.a, 'FG', 'PLYR0001.INI', '[1G Player]\nName=Ana\n', '2026-01-01T10:00:00Z')
+        r = sync.after_play('FG', self.a, self.cfg_a)
+        self.assertEqual(r.action, 'uploaded')
+        self.assertTrue(os.path.exists(os.path.join(self.cloud, 'Trampolin-sync', 'FG.zip')))
+        self.assertEqual(sync.after_play('FG', self.a, self.cfg_a).action, 'same')
+
+        self.as_device('b')
+        r = sync.before_play('FG', self.b, self.cfg_b)
+        self.assertEqual(r.action, 'downloaded')
+        p = os.path.join(self.b, 'games', 'FG', 'PLYR0001.INI')
+        self.assertIn('Ana', read(p))
+        self.assertEqual(sync.to_iso(os.path.getmtime(p)), '2026-01-01T10:00:00Z')
+        self.assertEqual(sync.before_play('FG', self.b, self.cfg_b).action, 'same')
+
+        self.save(self.b, 'FG', 'PLYR0001.INI', '[1G Player]\nName=Ana\nModule00=1\n', '2026-01-02T10:00:00Z')
+        self.assertEqual(sync.after_play('FG', self.b, self.cfg_b).action, 'uploaded')
+        self.as_device('a')
+        r = sync.before_play('FG', self.a, self.cfg_a)
+        self.assertEqual(r.action, 'downloaded')
+        self.assertTrue(r.backup and os.path.exists(r.backup), 'debe guardar la partida que reemplaza')
+        self.assertIn('Module00', read(os.path.join(self.a, 'games', 'FG', 'PLYR0001.INI')))
+
+    def test_local_newer_is_kept(self):
+        self.as_device('b')
+        self.save(self.b, 'FG', 'PLYR0001.INI', '[P]\nName=Vieja\n', '2026-01-01T10:00:00Z')
+        sync.after_play('FG', self.b, self.cfg_b)
+        self.as_device('a')
+        self.save(self.a, 'FG', 'PLYR0001.INI', '[P]\nName=Nueva\n', '2026-03-01T10:00:00Z')
+        self.assertEqual(sync.before_play('FG', self.a, self.cfg_a).action, 'local-newer')
+        self.assertIn('Nueva', read(os.path.join(self.a, 'games', 'FG', 'PLYR0001.INI')))
+        self.assertTrue(sync.status(self.a)[0][4] or sync.status(self.a)[1][4], 'debe quedar pendiente de subir')
+
+    def test_conflict_keeps_a_copy(self):
+        self.as_device('a')
+        self.save(self.a, 'FG', 'PLYR0001.INI', '[P]\nName=A1\n', '2026-01-01T10:00:00Z')
+        sync.after_play('FG', self.a, self.cfg_a)
+        self.as_device('b')
+        sync.before_play('FG', self.b, self.cfg_b)
+        self.save(self.b, 'FG', 'PLYR0001.INI', '[P]\nName=B2\n', '2026-01-02T10:00:00Z')
+        sync.after_play('FG', self.b, self.cfg_b)
+        self.as_device('a')                     # A jugó sin red y después de B
+        self.save(self.a, 'FG', 'PLYR0001.INI', '[P]\nName=A3\n', '2026-01-03T10:00:00Z')
+        r = sync.after_play('FG', self.a, self.cfg_a)
+        self.assertEqual(r.action, 'uploaded')
+        self.assertTrue(r.conflict and 'conflicto-Deck' in r.conflict)
+        content, _ = core.read_saves_zip(r.conflict)      # la copia se puede importar
+        self.assertIn('PLYR0001.INI', content['FG'])
+
+    def test_remote_newer_is_not_overwritten_on_close(self):
+        self.as_device('b')
+        self.save(self.b, 'FG', 'PLYR0001.INI', '[P]\nName=B\n', '2026-05-01T10:00:00Z')
+        sync.after_play('FG', self.b, self.cfg_b)
+        self.as_device('a')
+        self.save(self.a, 'FG', 'PLYR0001.INI', '[P]\nName=A\n', '2026-01-01T10:00:00Z')
+        self.assertEqual(sync.after_play('FG', self.a, self.cfg_a).action, 'remote-newer')
+
+    def test_sync_exclude(self):
+        self.as_device('a')
+        self.save(self.a, '4G', 'SAVE1.SAV', 's', '2026-01-01T10:00:00Z')
+        self.save(self.a, '4G', '4G.INI', '[Hardware]\nResourceDirectory=M:\\\n', '2026-01-01T10:00:00Z')
+        sync.after_play('4G', self.a, self.cfg_a)
+        names = zip_names(os.path.join(self.cloud, 'Trampolin-sync', '4G.zip'))
+        self.assertEqual(sorted(names), ['SAVE1.SAV', 'trampolin-saves.json'])
+        self.as_device('b')
+        self.save(self.b, '4G', '4G.INI', 'propio', '2025-01-01T10:00:00Z')
+        sync.before_play('4G', self.b, self.cfg_b)
+        self.assertEqual(read(os.path.join(self.b, 'games', '4G', '4G.INI')), 'propio')
+
+    def test_folder_missing(self):
+        cfg = {'sync': {'mode': 'folder', 'folder': os.path.join(self.t, 'no-existe')}}
+        self.save(self.a, 'FG', 'PLYR0001.INI', '[P]\n', '2026-01-01T10:00:00Z')
+        with self.assertRaises(TrError) as c:
+            sync.after_play('FG', self.a, cfg)
+        self.assertEqual(c.exception.code, 'TR-SYN-002')
+        self.assertTrue([r for r in sync.status(self.a) if r[0] == 'FG'][0][4], 'debe quedar pendiente')
+
+    def test_bad_remote_blocks_play_but_not_upload(self):
+        d = os.path.join(self.cloud, 'Trampolin-sync')
+        os.makedirs(d)
+        entries = {'PLYR0001.INI': b'MZ' + b'\0' * 0x3A + b'\x40\0\0\0PE\0\0'}
+        with open(os.path.join(d, 'FG.zip'), 'wb') as f:
+            f.write(make_zip(entries, manifest_for('FG', entries)))
+        with self.assertRaises(TrError) as c:
+            sync.before_play('FG', self.a, self.cfg_a)
+        self.assertEqual(c.exception.code, 'TR-SYN-005')
+        self.save(self.a, 'FG', 'PLYR0001.INI', '[P]\nName=A\n', '2026-01-01T10:00:00Z')
+        self.assertEqual(sync.after_play('FG', self.a, self.cfg_a).action, 'uploaded')
+        self.assertEqual(sync.before_play('FG', self.a, self.cfg_a).action, 'same')
+
+
+class SyncValidationTests(unittest.TestCase):
+    GOOD = {'PLYR0001.INI': b'[1G Player]\r\nName=955D,D57E\r\n', 'volumes.sav': b'\x01\x02\x03'}
+
+    def assertRejected(self, data, gid='FG'):
+        with self.assertRaises(TrError) as c:
+            sync.validate_bundle(gid, data)
+        self.assertEqual(c.exception.code, 'TR-SYN-005')
+        return c.exception.data['reason']
+
+    def test_good(self):
+        meta, files = sync.validate_bundle('FG', make_zip(self.GOOD, manifest_for('FG', self.GOOD)))
+        self.assertEqual(set(files), set(self.GOOD))
+
+    def test_rejections(self):
+        g = self.GOOD
+        cases = {
+            'ruta': make_zip(dict(g, **{'../x.sav': b'1'}), manifest_for('FG', g)),
+            'carpeta': make_zip({'FG/PLYR0001.INI': b'[a]'}, manifest_for('FG', {'FG/PLYR0001.INI': b'[a]'})),
+            'otro juego': make_zip(g, manifest_for('KG', g)),
+            'no es partida': make_zip({'FG.EXE': b'x'}, manifest_for('FG', {'FG.EXE': b'x'})),
+            'sin manifiesto': make_zip(g),
+            'archivo extra': make_zip(dict(g, **{'ka.atr': b'1'}), manifest_for('FG', g)),
+            'falta archivo': make_zip({'volumes.sav': g['volumes.sav']}, manifest_for('FG', g)),
+            'hash': make_zip(dict(g, **{'volumes.sav': b'cambiado'}), manifest_for('FG', g)),
+            'futuro': make_zip(g, manifest_for('FG', g, updated='2099-01-01T00:00:00Z')),
+            'clave extra': make_zip(g, manifest_for('FG', g, extra=1)),
+            'ejecutable': make_zip({'volumes.sav': b'MZ' + b'\0' * 0x3A + b'\x40\0\0\0PE\0\0'},
+                                   manifest_for('FG', {'volumes.sav': b'MZ' + b'\0' * 0x3A + b'\x40\0\0\0PE\0\0'})),
+            'zip adentro': make_zip({'volumes.sav': b'PK\x03\x04rest'}, manifest_for('FG', {'volumes.sav': b'PK\x03\x04rest'})),
+            'ini binario': make_zip({'PLYR0001.INI': b'[a]\r\nk=\x00\x01'}, manifest_for('FG', {'PLYR0001.INI': b'[a]\r\nk=\x00\x01'})),
+            'ini raro': make_zip({'PLYR0001.INI': b'<script>'}, manifest_for('FG', {'PLYR0001.INI': b'<script>'})),
+            'bomba': make_zip({'volumes.sav': b'\0' * (2 << 20)}, manifest_for('FG', {'volumes.sav': b'\0' * (2 << 20)})),
+            'no zip': b'hola',
+        }
+        for why, data in cases.items():
+            with self.subTest(why):
+                self.assertRejected(data)
+        dup = io.BytesIO()
+        with zipfile.ZipFile(dup, 'w') as z:
+            z.writestr('trampolin-saves.json', json.dumps(manifest_for('FG', {'ka.atr': b'1'})))
+            z.writestr('ka.atr', b'1')
+            z.writestr('KA.ATR', b'2')
+        self.assertIn('repetidos', self.assertRejected(dup.getvalue()))
+        many = {'PLYR%04d.INI' % i: b'[a]' for i in range(70)}
+        self.assertIn('demasiados', self.assertRejected(make_zip(many, manifest_for('FG', many))))
+
+    def test_windows_bundle(self):
+        # tests/fixtures/sync-windows-FG.zip lo genera New-TrSyncBundle (Windows); Run-Tests.ps1 valida el de Linux.
+        with open(os.path.join(HERE, 'fixtures', 'sync-windows-FG.zip'), 'rb') as f:
+            meta, files = sync.validate_bundle('FG', f.read())
+        self.assertEqual(meta['platform'], 'windows')
+        self.assertEqual(sorted(files), ['ka.atr', 'plyr8999.ini'])
+
+    def test_mz_without_pe_is_data(self):
+        e = {'volumes.sav': b'MZ\x00\x01datos de partida'}
+        sync.validate_bundle('FG', make_zip(e, manifest_for('FG', e)))
+
+
+class FakeGoogle(http.server.BaseHTTPRequestHandler):
+    """Imita los endpoints de OAuth y Drive que usa sync.DriveBackend."""
+    files = {}
+    fail = []          # códigos a devolver en las próximas peticiones a Drive
+    tokens_ok = True
+    calls = []
+
+    def log_message(self, *a):
+        pass
+
+    def reply(self, status, obj=None, raw=None, ctype='application/json'):
+        body = raw if raw is not None else json.dumps(obj or {}).encode()
+        self.send_response(status)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def body(self):
+        return self.rfile.read(int(self.headers.get('Content-Length') or 0))
+
+    def handle_any(self):
+        u = urllib.parse.urlparse(self.path)
+        FakeGoogle.calls.append((self.command, u.path))
+        data = self.body()
+        if u.path == '/device/code':
+            return self.reply(200, {'device_code': 'DEV', 'user_code': 'ABCD-EFGH', 'verification_url': 'https://www.google.com/device',
+                                    'interval': 1, 'expires_in': 600})
+        if u.path == '/token':
+            f = urllib.parse.parse_qs(data.decode())
+            if f.get('grant_type') == ['urn:ietf:params:oauth:grant-type:device_code']:
+                payload = base64.urlsafe_b64encode(json.dumps({'email': 'ana@example.com'}).encode()).decode().rstrip('=')
+                return self.reply(200, {'access_token': 'AT', 'refresh_token': 'RT', 'expires_in': 3600, 'id_token': 'x.%s.y' % payload})
+            if not FakeGoogle.tokens_ok:
+                return self.reply(400, {'error': 'invalid_grant', 'error_description': 'Token has been expired or revoked.'})
+            return self.reply(200, {'access_token': 'AT', 'expires_in': 3600})
+        if u.path == '/revoke':
+            return self.reply(200)
+        if self.headers.get('Authorization') != 'Bearer AT':
+            return self.reply(401, {'error': {'message': 'Invalid Credentials'}})
+        if FakeGoogle.fail:
+            code = FakeGoogle.fail.pop(0)
+            reason = 'storageQuotaExceeded' if code == 403 else 'backendError'
+            return self.reply(code, {'error': {'message': 'falla simulada', 'errors': [{'reason': reason}]}})
+        if u.path == '/drive/v3/files' and self.command == 'GET':
+            return self.reply(200, {'files': [dict(id=k, **{x: v[x] for x in ('name', 'appProperties')}) for k, v in FakeGoogle.files.items()]})
+        if u.path.startswith('/drive/v3/files/') and self.command == 'GET':
+            f = FakeGoogle.files.get(u.path.rsplit('/', 1)[1])
+            return self.reply(200, raw=f['data'], ctype='application/zip') if f else self.reply(404, {'error': {'message': 'no'}})
+        if u.path.startswith('/upload/drive/v3/files'):
+            boundary = self.headers['Content-Type'].split('boundary=')[1].encode()
+            parts = data.split(b'--' + boundary)
+            meta = json.loads(parts[1].split(b'\r\n\r\n', 1)[1].rstrip(b'\r\n'))
+            content = parts[2].split(b'\r\n\r\n', 1)[1][:-2]
+            fid = u.path.rsplit('/', 1)[1] if self.command == 'PATCH' else 'id%d' % (len(FakeGoogle.files) + 1)
+            if self.command == 'POST':
+                assert meta.get('parents') == ['appDataFolder']
+            FakeGoogle.files[fid] = {'name': meta['name'], 'appProperties': meta['appProperties'], 'data': content}
+            return self.reply(200, {'id': fid})
+        return self.reply(404, {'error': {'message': 'ruta desconocida'}})
+
+    do_GET = do_POST = do_PATCH = handle_any
+
+
+class SyncDriveTests(SyncTestBase):
+    def setUp(self):
+        super().setUp()
+        FakeGoogle.files, FakeGoogle.fail, FakeGoogle.tokens_ok, FakeGoogle.calls = {}, [], True, []
+        self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), FakeGoogle)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        base = 'http://127.0.0.1:%d' % self.server.server_port
+        self.conf = dict(sync.google_settings(), clientId='cid', clientSecret='sec', authBase=base, apiBase=base, retryDelay=0.01)
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        super().tearDown()
+
+    def backend(self, name):
+        return sync.DriveBackend(sync.TokenStore(os.path.join(self.t, 'token-%s.json' % name)), conf=self.conf)
+
+    def test_link_and_roundtrip(self):
+        da, db = self.backend('a'), self.backend('b')
+        code = da.start_link()
+        self.assertEqual(code['user_code'], 'ABCD-EFGH')
+        self.assertEqual(da.poll_link(code['device_code']), 'ana@example.com')
+        self.assertEqual(da.linked_email(), 'ana@example.com')
+        db.poll_link('DEV')
+        self.as_device('a')
+        self.save(self.a, 'FG', 'PLYR0001.INI', '[P]\nName=Ana\n', '2026-01-01T10:00:00Z')
+        self.assertEqual(sync.after_play('FG', self.a, self.cfg_a, da).action, 'uploaded')
+        self.save(self.a, 'FG', 'PLYR0001.INI', '[P]\nName=Ana2\n', '2026-01-02T10:00:00Z')
+        self.assertEqual(sync.after_play('FG', self.a, self.cfg_a, da).action, 'uploaded')
+        self.assertEqual(len(FakeGoogle.files), 1, 'la segunda subida debe actualizar el mismo archivo')
+        self.as_device('b')
+        self.assertEqual(sync.before_play('FG', self.b, self.cfg_b, db).action, 'downloaded')
+        self.assertIn('Ana2', read(os.path.join(self.b, 'games', 'FG', 'PLYR0001.INI')))
+        db.unlink()
+        self.assertIsNone(db.linked_email())
+
+    def test_errors(self):
+        d = self.backend('a')
+        d.poll_link('DEV')
+        self.save(self.a, 'FG', 'PLYR0001.INI', '[P]\n', '2026-01-01T10:00:00Z')
+        FakeGoogle.fail = [503, 500]                       # pasajero: se reintenta
+        self.assertEqual(sync.after_play('FG', self.a, self.cfg_a, d).action, 'uploaded')
+        FakeGoogle.fail = [500] * 10
+        with self.assertRaises(TrError) as c:
+            sync.before_play('FG', self.a, self.cfg_a, d)
+        self.assertEqual(c.exception.code, 'TR-SYN-006')
+        FakeGoogle.fail = [403]
+        self.save(self.a, 'FG', 'PLYR0001.INI', '[P]\nX=1\n', '2026-01-02T10:00:00Z')
+        with self.assertRaises(TrError) as c:
+            sync.after_play('FG', self.a, self.cfg_a, d)
+        self.assertEqual(c.exception.code, 'TR-SYN-004')
+        FakeGoogle.fail = []
+        d.access = None
+        FakeGoogle.tokens_ok = False
+        with self.assertRaises(TrError) as c:
+            sync.after_play('FG', self.a, self.cfg_a, d)
+        self.assertEqual(c.exception.code, 'TR-SYN-003')
+        port = self.server.server_port
+        self.server.shutdown()
+        self.server.server_close()
+        self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), FakeGoogle)     # para el tearDown
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        d.conf = dict(d.conf, apiBase='http://127.0.0.1:%d' % port, authBase='http://127.0.0.1:%d' % port)
+        d.access = None
+        with self.assertRaises(TrError) as c:
+            sync.after_play('FG', self.a, self.cfg_a, d)
+        self.assertEqual(c.exception.code, 'TR-SYN-001')
+
+    def test_not_configured(self):
+        d = sync.DriveBackend(sync.TokenStore(os.path.join(self.t, 't.json')), conf=dict(self.conf, clientId=''))
+        with self.assertRaises(TrError) as c:
+            d.start_link()
+        self.assertEqual(c.exception.code, 'TR-SYN-008')
+
+
 class SteamTests(unittest.TestCase):
     def test_vdf_roundtrip_and_merge(self):
         other = {'appid': -123, 'AppName': 'Otro juego', 'Exe': '"/usr/bin/otro"', 'tags': {'0': 'X'}, 'LastPlayTime': 5}
@@ -205,6 +558,14 @@ class SteamTests(unittest.TestCase):
             names = [e['AppName'] for e in doc['shortcuts'].values()]
             self.assertEqual(sorted(names), ['Biblioteca Trampolín', 'Otro juego'])
             self.assertTrue(os.path.exists(p + '.trampolin.bak'))
+
+    def test_windows_fixture(self):
+        # El mismo archivo lo lee y lo reescribe idéntico Trampolin.Steam.psm1 (Run-Tests.ps1).
+        with open(os.path.join(HERE, 'fixtures', 'shortcuts-linux.vdf'), 'rb') as f:
+            data = f.read()
+        self.assertEqual(steam.vdf_dump(steam.vdf_load(data)), data)
+        with open(os.path.join(HERE, 'fixtures', 'appid.txt')) as f:
+            self.assertEqual(steam.shortcut_appid('"C:\\x\\powershell.exe"', 'Trampol\u00edn - FG'), int(f.read()))
 
     def test_appid(self):
         a = steam.shortcut_appid('"/x/trampolin.sh"', 'Trampolín - FG')

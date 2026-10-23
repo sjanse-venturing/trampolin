@@ -87,12 +87,14 @@ function Get-TrConfig {
     if (-not $cfg) {
         $cfg = [ordered]@{ installRoot = $null; isoFolder = $null; dataMode = 'copy'; scale = 0; desktopShortcuts = $true }
     }
-    foreach ($k in @('installRoot', 'isoFolder', 'dataMode', 'scale', 'desktopShortcuts')) {
+    foreach ($k in @('installRoot', 'isoFolder', 'dataMode', 'scale', 'desktopShortcuts', 'steamShortcuts', 'sync')) {
         if (-not $cfg.Contains($k)) { $cfg[$k] = $null }
     }
     if (-not $cfg.dataMode) { $cfg.dataMode = 'copy' }
     if ($null -eq $cfg.scale) { $cfg.scale = 0 }
     if ($null -eq $cfg.desktopShortcuts) { $cfg.desktopShortcuts = $true }
+    if ($null -eq $cfg.steamShortcuts) { $cfg.steamShortcuts = $true }
+    if (-not ($cfg.sync -is [Collections.IDictionary])) { $cfg.sync = [ordered]@{ mode = 'off'; folder = $null; deviceId = $null; deviceName = $null } }
     $cfg
 }
 
@@ -594,7 +596,10 @@ function Get-TrInstalledGames {
 
 $script:SavesManifest = 'trampolin-saves.json'
 
-function Get-TrSavesFolder { Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Trampolín - partidas' }
+function Get-TrSavesFolder {
+    if ($env:TRAMPOLIN_SAVES_DIR) { return $env:TRAMPOLIN_SAVES_DIR }   # para las pruebas
+    Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Trampolín - partidas'
+}
 
 function Test-TrSaveName {
     <# ¿Es un nombre de archivo de partida de este juego? Solo nombres simples, sin rutas (sin distinguir mayúsculas). #>

@@ -2,7 +2,7 @@
 
 Trampolín Runtime permite jugar los juegos clásicos **Trampolín** (Anaya / Knowledge Adventure, 1995-1998) en **Windows 10 y Windows 11** de 64 bits y en el **Steam Deck** (o en Linux con Steam), sin máquinas virtuales y sin cambiar la configuración de tu computadora.
 
-Las partidas se pueden **pasar de una computadora a otra**, por ejemplo de la PC con Windows al Steam Deck (ver la sección 6).
+Las partidas se pueden **sincronizar solas entre tus equipos** (por ejemplo, la PC con Windows y el Steam Deck), con una carpeta compartida o con Google Drive (ver la sección 6), o **pasar a mano** con un archivo (sección 7). En Windows los juegos también se pueden agregar a **Steam** para abrirlos desde Big Picture o **Steam Link** (sección 3).
 
 Juegos incluidos (necesitás sus discos en formato `.iso`):
 
@@ -35,7 +35,7 @@ Juegos incluidos (necesitás sus discos en formato `.iso`):
    2. **¿Dónde están los discos?**: elegí la carpeta con los `.iso` y presioná *Buscar*. Si solo tenés el `.zip`, usá *Extraer el ZIP…*.
    3. **Elegí los juegos**: marcá los que quieras (por defecto, todos los que se encontraron).
    4. **¿Dónde instalar?**: dejá la carpeta sugerida o elegí otra con una **ruta corta y sin caracteres especiales** (por ejemplo, `C:\Trampolin`). Elegí también si querés **copiar los juegos completos** (recomendado: después no necesitás los `.iso`) o **usar los `.iso`** desde donde están.
-   5. **Pantalla**: *Ajustar a la pantalla* (recomendado), *Doble de tamaño* o *Tamaño original*.
+   5. **Pantalla**: *Ajustar a la pantalla* (recomendado), *Doble de tamaño* o *Tamaño original*. Si tenés Steam, podés marcar **Agregar también a Steam** (ver la sección 3).
    6. **Resumen** → *Instalar*. Podés cancelar en cualquier momento: se deshace solo el juego que se estaba copiando.
 4. Al terminar, presioná **Abrir la biblioteca**.
 
@@ -48,17 +48,26 @@ Para salir de un juego, usá la salida del propio juego (por ejemplo, la flecha 
 
 > Los juegos se ven en pantalla completa con bordes negros a los costados: es normal, son juegos de formato 4:3.
 
+### Desde Steam, Big Picture o Steam Link (Windows)
+
+Si usás Steam en la PC, podés agregar la biblioteca y los juegos como juegos «no de Steam» y abrirlos desde **Big Picture** o desde **Steam Link** (en el celular, la tablet o la TV), con el control.
+
+1. Marcá **Agregar también a Steam** al instalar, o presioná **Agregar a Steam** en la biblioteca. Si Steam está abierto, Trampolín lo cierra un momento y lo vuelve a abrir.
+2. En Steam, los juegos aparecen en la biblioteca, dentro de *No de Steam*, con su ícono.
+3. **Control:** los juegos se manejan con el mouse. En Steam elegí el juego → ⚙ → *Administrar* → *Configuración del control* y usá la plantilla **Teclado y mouse** (o **Gamepad con mouse**): el stick o el trackpad mueve el puntero y un gatillo o botón hace clic. En Steam Link con pantalla táctil también podés tocar donde quieras hacer clic.
+4. Si instalás o desinstalás juegos después, volvé a presionar **Agregar a Steam** para actualizar la lista.
+
 ## 4. Opciones y mantenimiento
 
 En la biblioteca, el botón **···** de cada juego ofrece:
 
 - **Reparar**: vuelve a copiar los archivos del juego sin tocar las partidas guardadas.
 - **Copia de seguridad de las partidas**: guarda un `.zip` en *Documentos\Trampolín - partidas*.
-- **Importar partidas…**: trae partidas desde un `.zip` (ver la sección 6).
+- **Importar partidas…**: trae partidas desde un `.zip` (ver la sección 7).
 - **Abrir la carpeta del juego**.
 - **Desinstalar…**: borra el juego (antes guarda una copia de las partidas).
 
-Abajo hay botones para **Agregar juegos…**, **Partidas ▾** (*Exportar todas las partidas…*, *Importar partidas…*, *Abrir la carpeta de copias*), cambiar el **tamaño de pantalla** (*Opciones…*), ver esta **Ayuda** y **Ver registro** (para pedir ayuda técnica).
+Abajo hay botones para **Agregar juegos…**, **Partidas ▾** (*Exportar todas las partidas…*, *Importar partidas…*, *Abrir la carpeta de copias*), **Sincronización…** (sección 6), **Agregar a Steam**, cambiar el **tamaño de pantalla** (*Opciones…*), ver esta **Ayuda** y **Ver registro** (para pedir ayuda técnica).
 
 ## 5. Steam Deck (y Linux)
 
@@ -90,9 +99,50 @@ Los juegos también quedan en el menú de aplicaciones del escritorio (*Juegos*)
 
 Abrí la Biblioteca Trampolín en el Modo Escritorio y presioná **Agregar a Steam** para actualizar los accesos.
 
-## 6. Pasar las partidas a otra computadora
+## 6. Sincronizar las partidas entre equipos (automático)
 
-Sirve para llevar las partidas de la PC con Windows al Steam Deck (o al revés, o de una PC a otra).
+Con la sincronización activada, **al abrir un juego** se usa la partida más reciente de todos tus equipos (Windows, Linux o Steam Deck), y **al cerrarlo** se guarda la tuya. Así, por ejemplo, un chico puede jugar en la PC y seguir en el Steam Deck desde el mismo punto.
+
+Se configura en la Biblioteca Trampolín → **Sincronización…**, en cada equipo. Hay dos formas:
+
+### Opción A: una carpeta sincronizada (la más simple)
+
+Elegí una carpeta que ya se copie sola entre tus equipos: la de **Google Drive para escritorio** (*Mi unidad*), **OneDrive**, **Dropbox**, **Syncthing**, una carpeta de red o incluso un **pendrive** que lleves de un equipo al otro. Trampolín guarda ahí una subcarpeta `Trampolin-sync` con un archivo por juego. Trampolín no se conecta a internet: de eso se encarga el programa de sincronización.
+
+1. **Sincronización…** → **Carpeta sincronizada** → **Examinar…** y elegí la carpeta.
+2. Presioná **Probar conexión** y después **Guardar**.
+3. Repetí lo mismo en los otros equipos, eligiendo la misma carpeta sincronizada.
+
+En el **Steam Deck** no hay Google Drive para escritorio. Las opciones más simples son:
+
+- **Syncthing** (gratis, sin cuentas): instalalo desde *Discover* (por ejemplo, «Syncthing» o «SyncThingy») en el Modo Escritorio y en la PC, y compartí una carpeta entre los dos.
+- **rclone** (para usar Google Drive, OneDrive o Dropbox): permite montar la nube como una carpeta. Es más técnico.
+- O usá la opción B, que no necesita programas extra.
+
+### Opción B: Google Drive
+
+Trampolín se conecta directamente con tu cuenta de Google. Las partidas se guardan en una **carpeta privada de la app**: no aparecen en tu Drive ni las puede ver nadie más.
+
+1. **Sincronización…** → **Google Drive** → **Vincular…**.
+2. Aparece un código. En el celular o en la computadora, entrá a `google.com/device`, iniciá sesión con tu cuenta y escribí el código. Esto funciona también en el Steam Deck en Modo Juego: el código se autoriza desde el celular.
+3. Presioná **Guardar**. Repetí en los otros equipos con **la misma cuenta**.
+
+Para dejar de usarla: **Sincronización…** → **Desvincular**. No se borra nada.
+
+> Si tu copia de Trampolín dice «No disponible» en Google Drive, falta configurar el acceso a Google en el programa (lo hace quien lo armó). Mientras tanto, usá la opción A.
+
+### Cómo funciona
+
+- **Gana la partida más reciente** de cada juego, según la última vez que se guardó en algún equipo.
+- **Nunca se pierde una partida:** antes de reemplazar las partidas de un equipo se guarda una copia en *Documentos\Trampolín - partidas*. Si dos equipos jugaron sin conexión, la partida que pierde también queda ahí (`<juego>-conflicto-<equipo>-<fecha>.zip`) y se puede importar con *Importar partidas…*.
+- **Si no hay conexión al abrir un juego**, aparece un aviso con la causa. Podés **Reintentar**, **Jugar igual** con la partida de ese equipo, o **Cerrar** para no jugar.
+- **Si no se puede guardar al cerrar el juego**, aparece un aviso con la causa (sin internet, carpeta desconectada, Drive lleno…). La partida queda en el equipo y se sube la próxima vez. **Sincronizar ahora** sube y baja todo de una vez.
+- **Seguridad:** todo lo que llega de la sincronización se revisa antes de usarlo. Tiene que ser una partida de ese juego, con los nombres, tamaños y contenido esperados, y no puede ser un programa. Si algo no pasa el control, no se usa y se avisa: «Partida rechazada por seguridad».
+- En la ventana de **Sincronización…** se ve, juego por juego, la fecha de la partida de ese equipo, la última sincronización y si hay algo pendiente.
+
+## 7. Pasar las partidas a otra computadora (a mano)
+
+Sirve para llevar las partidas de la PC con Windows al Steam Deck (o al revés, o de una PC a otra) sin usar la sincronización.
 
 1. En la computadora **de origen**, abrí la Biblioteca Trampolín → **Partidas ▾** → **Exportar todas las partidas…** y elegí dónde guardarlas (por ejemplo, un pendrive). Se crea un archivo `trampolin-partidas-<fecha>.zip`.
 2. Copiá ese archivo a la otra computadora (pendrive, tarjeta SD, la nube o la red).
@@ -105,7 +155,7 @@ Al importar:
 - También se pueden importar las copias de un solo juego que hace **Copia de seguridad de las partidas** (o *Desinstalar*), incluso las hechas con versiones anteriores.
 - Cerrá los juegos antes de importar.
 
-## 7. Problemas frecuentes
+## 8. Problemas frecuentes
 
 | Problema | Qué hacer |
 |---|---|
@@ -122,19 +172,26 @@ Al importar:
 | **Steam Deck: el juego queda con la pantalla en negro** | Instalá **Proton 10.0** desde Steam (*Biblioteca* → *Herramientas*). En la Biblioteca Trampolín → *Opciones…* → *Versión de Proton* elegí *Automática* o *Proton 10.0*. |
 | **Steam Deck: «Falta Proton»** | Instalá Proton 10.0 desde Steam y volvé a abrir la Biblioteca Trampolín. |
 | **Steam Deck: los juegos no aparecen en Steam** | En el Modo Escritorio, abrí la Biblioteca Trampolín y presioná **Agregar a Steam** (cierra Steam un momento). |
+| **«Sin conexión a Internet»** (sincronización) | Revisá la conexión. Podés presionar *Jugar igual*: al cerrar el juego se intenta guardar de nuevo, o usá *Sincronización…* → *Sincronizar ahora* más tarde. |
+| **«No se puede usar la carpeta de sincronización»** | La carpeta elegida no existe o no está conectada (pendrive, disco de red, Google Drive para escritorio cerrado). Conectala o elegí otra en *Sincronización…*. |
+| **«Hay que volver a vincular Google Drive»** | Se venció o se quitó el permiso. Presioná *Volver a vincular…* y repetí el código. |
+| **«Partida rechazada por seguridad»** | El archivo de ese juego en la sincronización está dañado o no es una partida de Trampolín. Tus partidas no se tocaron. Al cerrar el juego se reemplaza por la tuya. |
+| **Windows: los juegos no aparecen en Steam** | Presioná **Agregar a Steam** en la biblioteca (cierra Steam un momento). Iniciá sesión en Steam al menos una vez antes. |
+| **Steam Link: el control no mueve el puntero** | En Steam, juego → ⚙ → *Administrar* → *Configuración del control* → plantilla **Teclado y mouse**. |
 | **«No es una copia de partidas»** | El `.zip` elegido no tiene partidas de Trampolín. Elegí uno creado con *Exportar todas las partidas* o *Copia de seguridad de las partidas*. |
 | **Cualquier otro error** | En el mensaje de error presioná **Copiar informe** y envialo a quien te ayude con la computadora. El registro completo está en `<carpeta de instalación>\logs`. |
 
-## 8. Desinstalar todo
+## 9. Desinstalar todo
 
 1. En la biblioteca, desinstalá cada juego (*···* → *Desinstalar…*). Las partidas quedan guardadas en *Documentos\Trampolín - partidas*.
 2. Borrá la carpeta de instalación (por defecto `%LOCALAPPDATA%\Trampolin` en Windows, `/home/deck/Trampolin` en el Steam Deck).
-3. Windows: borrá la carpeta del menú Inicio *Trampolín* si quedó vacía. Steam Deck: en Steam, clic derecho en cada juego de la colección *Trampolín* → *Administrar* → *Eliminar acceso directo*, y borrá la carpeta `/home/deck/.local/share/trampolin`.
+3. Windows: borrá la carpeta del menú Inicio *Trampolín* si quedó vacía. Si agregaste los juegos a Steam, en Steam: clic derecho en cada uno → *Administrar* → *Eliminar acceso directo*. La configuración (y la vinculación con Google Drive) está en `%LOCALAPPDATA%\Trampolin`. Steam Deck: en Steam, clic derecho en cada juego de la colección *Trampolín* → *Administrar* → *Eliminar acceso directo*, y borrá la carpeta `/home/deck/.local/share/trampolin`.
 
 Trampolín Runtime **no** modifica el registro de Windows, la carpeta `C:\Windows` ni la configuración de pantalla.
 
-## 9. Privacidad y aviso legal
+## 10. Privacidad y aviso legal
 
-- Todo funciona sin conexión a internet. No se envía ningún dato.
+- Todo funciona sin conexión a internet. No se envía ningún dato, salvo que actives la sincronización con **Google Drive**: en ese caso, al abrir y cerrar cada juego se envían a **tu** cuenta de Google solo los archivos de partida de ese juego, a una carpeta privada de la app (Trampolín solo pide acceso a esa carpeta, no a tus archivos). El permiso se guarda cifrado en el equipo y se quita con *Desvincular* (o desde la configuración de seguridad de tu cuenta de Google).
+- Con la opción *Carpeta sincronizada*, Trampolín solo escribe en la carpeta elegida; la copia a otros equipos la hace el programa de sincronización que elijas.
 - Los juegos *Trampolín* son propiedad de sus respectivos titulares (Knowledge Adventure / Anaya). Trampolín Runtime **no incluye los juegos**: usa los discos que vos aportás.
 - `WING32.DLL`, `trhook.dll` y `trlaunch.exe` son componentes propios de compatibilidad: reemplazan la biblioteca WinG de 1994 y adaptan los juegos al Windows actual (pantalla, sonido y archivos) sin modificar los juegos originales. En el Steam Deck se ejecutan dentro de **Proton**, la capa de compatibilidad de Steam.

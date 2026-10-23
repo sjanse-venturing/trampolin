@@ -1,5 +1,12 @@
 ﻿# Dialogs.ps1 — diálogos amigables (error, confirmación, progreso en segundo plano).
 
+function Get-TrExtraHeight {
+    <# Cuánto más alto tiene que ser un texto de $Width píxeles que no entra en $Height (máximo 360). #>
+    param([string]$Text, [int]$Width, [int]$Height)
+    $size = [System.Windows.Forms.TextRenderer]::MeasureText([string]$Text, $global:TrTheme.Font, (New-Object System.Drawing.Size($Width, 0)), [System.Windows.Forms.TextFormatFlags]::WordBreak)
+    [Math]::Min(360, [Math]::Max(0, $size.Height + 8 - $Height))
+}
+
 function Show-TrError {
     <#
       Muestra un error en lenguaje simple, con detalles técnicos plegados y
@@ -12,23 +19,24 @@ function Show-TrError {
     }
     Write-TrLog Error ("Se mostró al usuario {0}: {1}" -f $info.Code, $info.Message)
 
-    $f = New-TrForm -Title 'Trampolín' -Width 560 -Height 250
+    $extra = Get-TrExtraHeight -Text $info.Message -Width 470 -Height 90
+    $f = New-TrForm -Title 'Trampolín' -Width 560 -Height (250 + $extra)
     $f.TopMost = $true
     $pic = New-Object System.Windows.Forms.PictureBox
     $pic.Image = [System.Drawing.SystemIcons]::Warning.ToBitmap()
     $pic.Location = New-Object System.Drawing.Point(20, 22); $pic.Size = New-Object System.Drawing.Size(32, 32)
     $title = New-TrLabel -Text $info.Title -X 66 -Y 20 -Width 470 -Font $global:TrTheme.FontBig
-    $msg = New-TrLabel -Text $info.Message -X 66 -Y 52 -Width 470 -Height 90
+    $msg = New-TrLabel -Text $info.Message -X 66 -Y 52 -Width 470 -Height (90 + $extra)
     $details = New-Object System.Windows.Forms.TextBox
     $details.Multiline = $true; $details.ReadOnly = $true; $details.ScrollBars = 'Vertical'
     $details.Font = New-Object System.Drawing.Font('Consolas', 8.5)
     $details.Text = $info.Details -replace "`r?`n", "`r`n"
-    $details.Location = New-Object System.Drawing.Point(20, 196); $details.Size = New-Object System.Drawing.Size(520, 160)
+    $details.Location = New-Object System.Drawing.Point(20, (196 + $extra)); $details.Size = New-Object System.Drawing.Size(520, 160)
     $details.Visible = $false
     $f.Controls.AddRange(@($pic, $title, $msg, $details))
 
     $panel = New-Object System.Windows.Forms.FlowLayoutPanel
-    $panel.FlowDirection = 'RightToLeft'; $panel.Location = New-Object System.Drawing.Point(20, 150)
+    $panel.FlowDirection = 'RightToLeft'; $panel.Location = New-Object System.Drawing.Point(20, (150 + $extra))
     $panel.Size = New-Object System.Drawing.Size(520, 42)
     $f.Controls.Add($panel)
 
@@ -43,7 +51,7 @@ function Show-TrError {
         if ($a -eq 'details') {
             $b.Add_Click({
                 $details.Visible = -not $details.Visible
-                $f.ClientSize = New-Object System.Drawing.Size(560, $(if ($details.Visible) { 370 } else { 250 }))
+                $f.ClientSize = New-Object System.Drawing.Size(560, ($extra + $(if ($details.Visible) { 370 } else { 250 })))
             }.GetNewClosure())
         } elseif ($a -eq 'copy') {
             $b.Add_Click({ [System.Windows.Forms.Clipboard]::SetText((Get-TrReport $info)); $b.Text = 'Copiado ✓' }.GetNewClosure())
@@ -78,10 +86,11 @@ function Show-TrConfirm {
 
 function Show-TrInfo {
     param([string]$Title, [string]$Message, $Owner = $null)
-    $f = New-TrForm -Title 'Trampolín' -Width 500 -Height 190
+    $extra = Get-TrExtraHeight -Text $Message -Width 460 -Height 80
+    $f = New-TrForm -Title 'Trampolín' -Width 500 -Height (190 + $extra)
     $t = New-TrLabel -Text $Title -X 20 -Y 18 -Width 460 -Font $global:TrTheme.FontBig
-    $m = New-TrLabel -Text $Message -X 20 -Y 52 -Width 460 -Height 80
-    $ok = New-TrButton -Text 'Aceptar' -Width 120 -Primary; $ok.Location = New-Object System.Drawing.Point(360, 140); $ok.DialogResult = 'OK'
+    $m = New-TrLabel -Text $Message -X 20 -Y 52 -Width 460 -Height (80 + $extra)
+    $ok = New-TrButton -Text 'Aceptar' -Width 120 -Primary; $ok.Location = New-Object System.Drawing.Point(360, (140 + $extra)); $ok.DialogResult = 'OK'
     $f.Controls.AddRange(@($t, $m, $ok)); $f.AcceptButton = $ok
     [void]$f.ShowDialog($Owner); $f.Dispose()
 }
@@ -107,6 +116,8 @@ function Start-TrBackground {
         try {
             Import-Module (Join-Path $core 'Trampolin.Errors.psm1')
             Import-Module (Join-Path $core 'Trampolin.Core.psm1')
+            Import-Module (Join-Path $core 'Trampolin.Sync.psm1')
+            Import-Module (Join-Path $core 'Trampolin.Steam.psm1')
             Import-TrStrings $strings
             if ($logFile) { Initialize-TrLog (Split-Path -Parent $logFile) }
             $sync.Result = & ([scriptblock]::Create($body)) $sync $arguments
@@ -127,18 +138,19 @@ function Stop-TrBackground {
 
 function Invoke-TrWithProgress {
     <# Ventanita modal de progreso para tareas cortas (reparar, copia de seguridad...). Devuelve $Sync. #>
-    param([string]$Title, [scriptblock]$Script, $Arguments, $Owner = $null)
+    param([string]$Title, [scriptblock]$Script, $Arguments, $Owner = $null, [switch]$Marquee)
     $f = New-TrForm -Title 'Trampolín' -Width 460 -Height 140
     $f.ControlBox = $false
     $l = New-TrLabel -Text $Title -X 20 -Y 18 -Width 420
     $bar = New-Object System.Windows.Forms.ProgressBar
     $bar.Location = New-Object System.Drawing.Point(20, 52); $bar.Size = New-Object System.Drawing.Size(420, 22)
+    if ($Marquee) { $bar.Style = 'Marquee'; $bar.MarqueeAnimationSpeed = 30 }
     $sub = New-TrLabel -Text '' -X 20 -Y 84 -Width 420 -Font $global:TrTheme.FontSmall -Color $global:TrTheme.Muted
     $f.Controls.AddRange(@($l, $bar, $sub))
     $sync = Start-TrBackground -Script $Script -Arguments $Arguments
     $timer = New-Object System.Windows.Forms.Timer; $timer.Interval = 150
     $timer.Add_Tick({
-        $bar.Value = [Math]::Max(0, [Math]::Min(100, [int]$sync.Percent)); $sub.Text = $sync.Message
+        if (-not $Marquee) { $bar.Value = [Math]::Max(0, [Math]::Min(100, [int]$sync.Percent)) }; $sub.Text = $sync.Message
         if ($sync.Done) { $timer.Stop(); $f.Close() }
     }.GetNewClosure())
     $f.Add_Shown({ $timer.Start() }.GetNewClosure())

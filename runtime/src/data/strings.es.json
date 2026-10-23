@@ -23,10 +23,22 @@
     "TR-RUN-006": { "title": "Juego no instalado", "message": "«{game}» no está instalado o su instalación está incompleta. Usá «Reparar» o volvé a instalarlo.", "actions": [ "repair" ] },
     "TR-SAV-001": { "title": "No es una copia de partidas", "message": "El archivo «{file}» no contiene partidas de Trampolín. Elegí un .zip creado con «Copia de seguridad de las partidas» o «Exportar todas las partidas».", "actions": [ "close" ] },
     "TR-SAV-002": { "title": "No se pudieron importar las partidas", "message": "No pudimos importar las partidas de «{file}». Las partidas que tenías quedaron guardadas en «Trampolín - partidas».", "actions": [ "retry", "details" ] },
+    "TR-SYN-001": { "title": "Sin conexión a Internet", "message": "No pudimos conectarnos con Google Drive para sincronizar «{game}». Revisá que el equipo tenga Internet. Causa: {detail}", "actions": [ "retry", "details" ] },
+    "TR-SYN-002": { "title": "No se puede usar la carpeta de sincronización", "message": "No pudimos {op} la partida de «{game}» en la carpeta «{path}». Revisá que la carpeta exista, que tengas permiso y que el disco (o pendrive) esté conectado. Causa: {detail}", "actions": [ "retry", "details" ] },
+    "TR-SYN-003": { "title": "Hay que volver a vincular Google Drive", "message": "Google rechazó el acceso de Trampolín a tu Drive (se venció o se revocó el permiso). Abrí «Sincronización…» y volvé a vincular la cuenta. Causa: {detail}", "actions": [ "relink", "details" ] },
+    "TR-SYN-004": { "title": "Tu Google Drive está lleno", "message": "No hay espacio en tu Google Drive para guardar la partida de «{game}». Liberá espacio y volvé a intentar.", "actions": [ "retry", "details" ] },
+    "TR-SYN-005": { "title": "Partida rechazada por seguridad", "message": "La partida de «{game}» que está en la sincronización no pasó los controles de seguridad y no se usó. Tus partidas de este equipo no se tocaron. Motivo: {reason}", "actions": [ "details" ] },
+    "TR-SYN-006": { "title": "Google Drive no respondió bien", "message": "Google Drive devolvió un error al sincronizar «{game}». Suele ser pasajero: probá de nuevo en unos minutos. Causa: {detail}", "actions": [ "retry", "details" ] },
+    "TR-SYN-007": { "title": "No se pudo aplicar la partida descargada", "message": "Descargamos la partida más reciente de «{game}» pero no pudimos copiarla a este equipo. Tus partidas anteriores quedaron en «Trampolín - partidas». Causa: {detail}", "actions": [ "retry", "details" ] },
+    "TR-SYN-008": { "title": "Google Drive no está configurado", "message": "Esta copia de Trampolín no tiene configurado el acceso a Google Drive. Usá el modo «Carpeta sincronizada» (por ejemplo, con Google Drive para escritorio) o pedile a quien armó el programa que lo configure.", "actions": [ "close" ] },
+    "TR-STM-001": { "title": "No encontramos Steam", "message": "No encontramos Steam en este equipo, o todavía no iniciaste sesión. Instalalo, iniciá sesión una vez y volvé a intentar.", "actions": [ "close" ] },
+    "TR-STM-002": { "title": "Steam no se cerró", "message": "Para agregar los juegos hay que cerrar Steam, y no se cerró a tiempo. Cerralo a mano (menú Steam → Salir) y volvé a intentar.", "actions": [ "retry", "details" ] },
+    "TR-STM-003": { "title": "No se pudieron agregar los juegos a Steam", "message": "No pudimos escribir la lista de juegos de Steam ({file}). La lista anterior quedó intacta. Causa: {detail}", "actions": [ "retry", "details" ] },
     "TR-GEN-001": { "title": "Ocurrió un error inesperado", "message": "Ocurrió un error inesperado. No es tu culpa: copiá el informe y envialo a quien te ayude con la computadora.", "actions": [ "copy", "details" ] }
   },
   "actions": {
     "close": "Cerrar", "browse": "Elegir otra carpeta…", "skip": "Saltar", "retry": "Reintentar", "details": "Ver detalles",
-    "locate": "Buscar el archivo…", "repair": "Reparar", "copy": "Copiar informe"
+    "locate": "Buscar el archivo…", "repair": "Reparar", "copy": "Copiar informe",
+    "playlocal": "Jugar igual", "relink": "Volver a vincular…"
   }
 }

@@ -20,8 +20,12 @@ $here = $PSScriptRoot
 try {
     Import-Module (Join-Path $here 'Core\Trampolin.Errors.psm1') -Force
     Import-Module (Join-Path $here 'Core\Trampolin.Core.psm1') -Force
+    Import-Module (Join-Path $here 'Core\Trampolin.Sync.psm1') -Force
+    Import-Module (Join-Path $here 'Core\Trampolin.Steam.psm1') -Force
     . (Join-Path $here 'UI\Theme.ps1')
     . (Join-Path $here 'UI\Dialogs.ps1')
+    . (Join-Path $here 'UI\Sync.ps1')
+    . (Join-Path $here 'UI\Steam.ps1')
     . (Join-Path $here 'UI\Wizard.ps1')
     . (Join-Path $here 'UI\Launcher.ps1')
     Import-TrStrings (Join-Path $here 'data\strings.es.json')
@@ -57,6 +61,7 @@ function Invoke-TrPlay {
     param([string]$Id)
     $cfg = Get-TrConfig
     if (-not $cfg.installRoot) { throw (New-TrError 'TR-RUN-006' @{ game = $Id }) }
+    if (-not (Invoke-TrSyncBeforePlayUI -Id $Id -Root $cfg.installRoot -Config $cfg)) { return }
     $session = $null
     try {
         $session = Start-TrGame -Id $Id -Root $cfg.installRoot -Scale ([int]$cfg.scale)
@@ -66,6 +71,7 @@ function Invoke-TrPlay {
         return
     }
     $diag = Complete-TrGame -Session $session
+    Invoke-TrSyncAfterPlayUI -Id $Id -Root $cfg.installRoot -Config $cfg
     if ($diag) {
         $action = Show-TrError (Get-TrErrorInfo $diag)
         if ($action -eq 'repair') { Invoke-TrMain -Mode 'auto' }

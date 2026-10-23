@@ -13,7 +13,9 @@ function Show-TrWizard {
         isoFolder = $(if ($Config.isoFolder) { $Config.isoFolder } else { Get-TrDefaultIsoFolder })
         root = $(if ($Config.installRoot) { $Config.installRoot } else { Get-TrDefaultInstallRoot })
         mode = $Config.dataMode; scale = [int]$Config.scale; desktop = [bool]$Config.desktopShortcuts
+        hasSteam = (Test-TrSteamInstalled)
     }
+    $state.steam = $state.hasSteam -and [bool]$Config.steamShortcuts
 
     $form = New-TrForm -Title 'Instalar Trampolín' -Width 780 -Height 580
     $header = New-TrHeader -Title 'Trampolín' -Subtitle 'Instalación de los juegos clásicos en Windows 10/11'
@@ -111,6 +113,12 @@ function Show-TrWizard {
     $chkDesktop.Text = 'Crear accesos directos en el Escritorio'; $chkDesktop.Location = New-Object System.Drawing.Point(24, 210); $chkDesktop.Width = 600
     $p4.Controls.Add($chkDesktop)
     $p4.Controls.Add((New-TrLabel -Text 'Siempre se agregan al menú Inicio, en la carpeta «Trampolín».' -X 24 -Y 240 -Width 700 -Color $global:TrTheme.Muted))
+    $chkSteam = New-Object System.Windows.Forms.CheckBox
+    $chkSteam.Text = 'Agregar también a Steam, para jugar desde Big Picture o Steam Link (cierra Steam un momento)'
+    $chkSteam.Location = New-Object System.Drawing.Point(24, 280); $chkSteam.Width = 720
+    $p4.Controls.Add($chkSteam)
+    $lblSteam = New-TrLabel -Text '' -X 44 -Y 308 -Width 700 -Color $global:TrTheme.Muted
+    $p4.Controls.Add($lblSteam)
 
     # ---- Página 5: resumen ---------------------------------------------------
     $p5 = New-Page
@@ -138,7 +146,7 @@ function Show-TrWizard {
     $lvDone.View = 'Details'; $lvDone.FullRowSelect = $true
     $lvDone.Location = New-Object System.Drawing.Point(24, 52); $lvDone.Size = New-Object System.Drawing.Size(728, 280)
     [void]$lvDone.Columns.Add('', 40); [void]$lvDone.Columns.Add('Juego', 300); [void]$lvDone.Columns.Add('Resultado', 380)
-    $lblDone2 = New-TrLabel -Text 'Podés jugar desde la «Biblioteca Trampolín» o desde los accesos directos del menú Inicio.' -X 24 -Y 342 -Width 728 -Height 44
+    $lblDone2 = New-TrLabel -Text 'Podés jugar desde la «Biblioteca Trampolín», desde los accesos directos del menú Inicio o, si los agregaste, desde Steam (también con Big Picture y Steam Link).' -X 24 -Y 342 -Width 728 -Height 44
     $p7.Controls.AddRange(@($lblDone, $lvDone, $lblDone2))
 
     $pages = @($p0, $p1, $p2, $p3, $p4, $p5, $p6, $p7)
@@ -232,7 +240,11 @@ function Show-TrWizard {
                 $rbIso.Enabled = [bool](Get-Command Mount-DiskImage -ErrorAction SilentlyContinue)
                 & $refreshSpace
             }
-            4 { foreach ($rb in $rbScale) { $rb.Checked = ([int]$rb.Tag -eq $state.scale) }; $chkDesktop.Checked = $state.desktop }
+            4 {
+                foreach ($rb in $rbScale) { $rb.Checked = ([int]$rb.Tag -eq $state.scale) }; $chkDesktop.Checked = $state.desktop
+                $chkSteam.Checked = $state.steam; $chkSteam.Enabled = $state.hasSteam
+                $lblSteam.Text = $(if ($state.hasSteam) { '' } else { 'No encontramos Steam en este equipo. Si lo instalás después, usá «Agregar a Steam» en la biblioteca.' })
+            }
             5 {
                 $sel = @($lvGames.CheckedItems | ForEach-Object { $_.Text })
                 $mode = $(if ($state.mode -eq 'copy') { 'Copiar los juegos completos a la computadora' } else { 'Usar los .iso desde su ubicación' })
@@ -245,6 +257,7 @@ function Show-TrWizard {
                     "Modo:  $mode",
                     "Pantalla:  $scaleText",
                     "Accesos directos en el Escritorio:  $(if ($state.desktop) { 'Sí' } else { 'No' })",
+                    "Agregar a Steam:  $(if ($state.steam) { 'Sí' } else { 'No' })",
                     '',
                     "Espacio necesario aproximado:  $(Format-TrSize (Get-TrRequiredBytes -GameIds @($lvGames.CheckedItems | ForEach-Object { $_.Tag.id }) -DataMode $state.mode))"
                 )) -join "`r`n"
@@ -271,6 +284,7 @@ function Show-TrWizard {
             4 {
                 foreach ($rb in $rbScale) { if ($rb.Checked) { $state.scale = [int]$rb.Tag } }
                 $state.desktop = $chkDesktop.Checked
+                $state.steam = $chkSteam.Checked -and $state.hasSteam
             }
         }
         $true
@@ -280,6 +294,7 @@ function Show-TrWizard {
         $games = @($lvGames.CheckedItems | ForEach-Object { @{ id = $_.Tag.id; iso = $_.Tag.iso } })
         $Config.installRoot = $state.root; $Config.isoFolder = $state.isoFolder; $Config.dataMode = $state.mode
         $Config.scale = $state.scale; $Config.desktopShortcuts = $state.desktop
+        if ($state.hasSteam) { $Config.steamShortcuts = $state.steam }
         Save-TrConfig $Config
         Initialize-TrLog (Join-Path $state.root 'logs')
         Write-TrLog Info ("Instalación: {0} juego(s) en {1}, modo {2}" -f $games.Count, $state.root, $state.mode)
@@ -348,6 +363,8 @@ function Show-TrWizard {
             $lblDone.Text = $(if ($state.cancelled) { 'Instalación cancelada' } elseif ($okCount -eq $state.results.Count -and $okCount) { '¡Listo! Los juegos ya están instalados.' } else { "Se instalaron $okCount de $($state.results.Count) juegos." })
             & $showPage 7
             if (-not $state.installed) { $btnNext.Text = 'Cerrar' }
+            elseif ($state.steam) { [void](Invoke-TrAddToSteamUI -Root $state.root -Owner $form) }
+            else { [void](Update-TrSteamShortcuts -Root $state.root) }
         }
     })
 

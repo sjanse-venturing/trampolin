@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from trampolin import core, errors, proton, steam  # noqa: E402
+from trampolin import core, errors, proton, steam, sync  # noqa: E402
 from trampolin.errors import TrError  # noqa: E402
 
 
@@ -55,6 +55,8 @@ def cli(argv):
     s = sub.add_parser('steam', help='agregar los juegos a Steam (cierra y vuelve a abrir Steam si hace falta)')
     s.add_argument('--no-restart', action='store_true', help='no reabrir Steam al terminar')
     sub.add_parser('menu', help='crear los accesos del menú del Modo Escritorio')
+    s = sub.add_parser('sync', help='sincronización de partidas entre equipos (se configura desde la biblioteca)')
+    s.add_argument('action', choices=('status', 'now'), help='status: estado de cada juego; now: sincronizar todo ahora')
     args = p.parse_args(argv)
 
     cfg = core.get_config()
@@ -107,8 +109,20 @@ def _cli_run(args, cfg):
             print('  %-9s %s %s' % (ig.id, '✓' if ig.healthy else '✗', ig.name))
         return 0
     if args.cmd == 'play':
+        if sync.enabled(cfg):
+            try:
+                print(sync.before_play(args.id, root, cfg).message)
+            except TrError as e:
+                info = errors.error_info(e)
+                print('Aviso: no se pudo sincronizar (%s: %s). Se juega con la partida de este equipo.' % (info.code, info.message))
         s = proton.start_game(args.id, root, cfg, print)
         diag = proton.complete_game(s)
+        if sync.enabled(cfg):
+            try:
+                print(sync.after_play(args.id, root, cfg).message)
+            except TrError as e:
+                info = errors.error_info(e)
+                print('Error: no se pudo guardar la partida en la sincronización (%s: %s).' % (info.code, info.message))
         if diag:
             raise diag
         return 0
@@ -159,6 +173,25 @@ def _cli_run(args, cfg):
         if was_running and not args.no_restart:
             steam.start_steam()
         return 0
+    if args.cmd == 'sync':
+        s = sync.sync_config(cfg)
+        print('Modo: %s%s  —  equipo: %s' % (s['mode'], ' (%s)' % s['folder'] if s['mode'] == 'folder' else '', s['deviceName']))
+        if args.action == 'status':
+            for gid, name, local, last, pending in sync.status(root):
+                print('  %-9s partida: %-16s sincronizada: %-16s %s' % (gid, sync.describe(local), sync.describe(last),
+                                                                       'pendiente' if pending and local else ''))
+            return 0
+        if not sync.enabled(cfg):
+            print('La sincronización está desactivada. Configurala desde la biblioteca («Sincronización…»).')
+            return 1
+        rc = 0
+        for gid, r, info in sync.sync_all(root, cfg):
+            if info:
+                rc = 1
+                print('  ✗ %s: %s — %s' % (gid, info.code, info.message))
+            else:
+                print('  ✓ ' + r.message + (' (la otra quedó en %s)' % r.conflict if r.conflict else ''))
+        return rc
     if args.cmd == 'menu':
         steam.write_desktop_entries(root)
         print('Accesos creados en %s' % steam.desktop_dir())

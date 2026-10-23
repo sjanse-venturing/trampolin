@@ -4,7 +4,7 @@ function Show-TrLauncher {
     param([Parameter(Mandatory)]$Config)
 
     $state = @{ session = $null; reopenWizard = $false; preselect = @() }
-    $form = New-TrForm -Title 'Biblioteca Trampolín' -Width 880 -Height 620 -Resizable
+    $form = New-TrForm -Title 'Biblioteca Trampolín' -Width 1060 -Height 620 -Resizable
     $form.MinimumSize = New-Object System.Drawing.Size(640, 480)
     $header = New-TrHeader -Title 'Biblioteca Trampolín' -Subtitle 'Elegí un juego y presioná «Jugar»'
     $flow = New-Object System.Windows.Forms.FlowLayoutPanel
@@ -12,13 +12,15 @@ function Show-TrLauncher {
     $bottom = New-Object System.Windows.Forms.Panel
     $bottom.Dock = 'Bottom'; $bottom.Height = 56; $bottom.BackColor = [System.Drawing.Color]::FromArgb(238, 234, 226)
     $btnAdd = New-TrButton -Text 'Agregar juegos…' -Width 150; $btnAdd.Location = New-Object System.Drawing.Point(16, 11)
-    $btnSaves = New-TrButton -Text 'Partidas ▾' -Width 120; $btnSaves.Location = New-Object System.Drawing.Point(174, 11)
-    $btnOptions = New-TrButton -Text 'Opciones…' -Width 120; $btnOptions.Location = New-Object System.Drawing.Point(302, 11)
-    $btnHelp = New-TrButton -Text 'Ayuda' -Width 100; $btnHelp.Location = New-Object System.Drawing.Point(430, 11)
-    $btnLog = New-TrButton -Text 'Ver registro' -Width 120; $btnLog.Location = New-Object System.Drawing.Point(538, 11)
-    $lblStatus = New-TrLabel -Text '' -X 672 -Y 19 -Width 195 -Color $global:TrTheme.Muted
+    $btnSaves = New-TrButton -Text 'Partidas ▾' -Width 110; $btnSaves.Location = New-Object System.Drawing.Point(174, 11)
+    $btnSync = New-TrButton -Text 'Sincronización…' -Width 140; $btnSync.Location = New-Object System.Drawing.Point(292, 11)
+    $btnSteam = New-TrButton -Text 'Agregar a Steam' -Width 140; $btnSteam.Location = New-Object System.Drawing.Point(440, 11)
+    $btnOptions = New-TrButton -Text 'Opciones…' -Width 110; $btnOptions.Location = New-Object System.Drawing.Point(588, 11)
+    $btnHelp = New-TrButton -Text 'Ayuda' -Width 90; $btnHelp.Location = New-Object System.Drawing.Point(706, 11)
+    $btnLog = New-TrButton -Text 'Ver registro' -Width 110; $btnLog.Location = New-Object System.Drawing.Point(804, 11)
+    $lblStatus = New-TrLabel -Text '' -X 926 -Y 19 -Width 120 -Color $global:TrTheme.Muted
     $lblStatus.AutoEllipsis = $true; $lblStatus.Anchor = 'Left,Right,Top'
-    $bottom.Controls.AddRange(@($btnAdd, $btnSaves, $btnOptions, $btnHelp, $btnLog, $lblStatus))
+    $bottom.Controls.AddRange(@($btnAdd, $btnSaves, $btnSync, $btnSteam, $btnOptions, $btnHelp, $btnLog, $lblStatus))
     $form.Controls.AddRange(@($flow, $bottom, $header))
     $tip = New-Object System.Windows.Forms.ToolTip
 
@@ -72,7 +74,8 @@ function Show-TrLauncher {
             $flow.Controls.Add($card)
         }
         $flow.ResumeLayout()
-        $lblStatus.Text = "Instalados: $($games.Count) de $(@(Get-TrCatalog).Count)"; $tip.SetToolTip($lblStatus, $root)
+        $lblStatus.Text = "Instalados: $($games.Count) de $(@(Get-TrCatalog).Count)"
+        $tip.SetToolTip($lblStatus, $root + $(if (Test-TrSyncEnabled $Config) { "`r`nSincronización: " + $(if ($Config.sync.mode -eq 'folder') { $Config.sync.folder } else { 'Google Drive' }) } else { '' }))
     }
 
     $locateIso = {
@@ -104,6 +107,7 @@ function Show-TrLauncher {
 
     $startGame = {
         param([string]$Id)
+        if (-not (Invoke-TrSyncBeforePlayUI -Id $Id -Root $root -Config $Config -Owner $form)) { return }
         $attempt = 0
         while ($attempt -lt 3) {
             $attempt++
@@ -133,6 +137,7 @@ function Show-TrLauncher {
         $diag = Complete-TrGame -Session $s
         $state.session = $null
         $form.WindowState = 'Normal'; $form.Activate()
+        Invoke-TrSyncAfterPlayUI -Id $s.Id -Root $root -Config $Config -Owner $form
         & $refresh
         if ($diag) {
             $action = Show-TrError (Get-TrErrorInfo $diag) $form
@@ -188,12 +193,21 @@ function Show-TrLauncher {
         if (-not (Show-TrConfirm -Title "¿Desinstalar «$name»?" -Message 'Se borrarán los archivos del juego de esta computadora. Antes guardaremos una copia de las partidas en Documentos.' -Yes 'Desinstalar' -No 'Cancelar' -Owner $form)) { return }
         try {
             $zip = Uninstall-TrGame -Id $id -Root $root -KeepSaves
-            Show-TrInfo -Title 'Juego desinstalado' -Message $(if ($zip) { "Las partidas quedaron guardadas en:`r`n$zip" } else { 'No había partidas para guardar.' }) -Owner $form
+            $msg = $(if ($zip) { "Las partidas quedaron guardadas en:`r`n$zip" } else { 'No había partidas para guardar.' })
+            if (-not (Update-TrSteamShortcuts -Root $root)) { $msg += "`r`n`r`nSteam está abierto: cuando lo cierres, usá «Agregar a Steam» para quitar el juego de la lista." }
+            Show-TrInfo -Title 'Juego desinstalado' -Message $msg -Owner $form
         } catch { [void](Show-TrError $_ $form) }
         & $refresh
     })
 
     $btnAdd.Add_Click({ $state.reopenWizard = $true; $form.Close() })
+    $btnSync.Add_Click({
+        if ($state.session) { [void](Show-TrError (Get-TrErrorInfo (New-TrError 'TR-RUN-001')) $form); return }
+        if (Show-TrSyncDialog -Config $Config -Root $root -Owner $form) { & $refresh }
+    })
+    $btnSteam.Add_Click({
+        if (Invoke-TrAddToSteamUI -Root $root -Owner $form) { $Config.steamShortcuts = $true; Save-TrConfig $Config }
+    })
     $btnHelp.Add_Click({
         $doc = @((Join-Path $root 'LEEME-RUNTIME.md'), (Join-Path (Get-TrAppRoot) 'LEEME-RUNTIME.md')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
         if ($doc) { Start-Process notepad.exe -ArgumentList ('"{0}"' -f $doc) }

@@ -6,6 +6,8 @@
 > `Trampolin.cmd` (doble clic) → asistente gráfico de instalación + lanzador de juegos con UI, manejo de errores amigable, log técnico, y el documento de usuario `LEEME-RUNTIME.md`.
 >
 > **Desde 2026-10-15 también en Linux / Steam Deck:** el mismo paquete trae `trampolin.sh`, un lanzador en Python + Tk que ejecuta los juegos con **Proton** usando las mismas piezas nativas (`trlaunch.exe`, `trhook.dll`, `WING32.DLL`). Las partidas se pueden **exportar e importar** entre Windows y el Steam Deck. Ver [§0.4](#04-linux--steam-deck-validado-el-2026-10-15) y [§15](#15-linux--steam-deck).
+>
+> **Desde la 1.1.0:** **sincronización automática de partidas** entre equipos (carpeta sincronizada o Google Drive, con validación de todo lo descargado), ver [§16](#16-sincronización-de-partidas-entre-equipos). En Windows, los juegos también se agregan a **Steam** para Big Picture y Steam Link, ver [§17](#17-steam-en-windows-big-picture-y-steam-link).
 
 ---
 
@@ -101,6 +103,8 @@ Causas encontradas al portar a Wine/Proton (todas corregidas en `trhook.dll`, qu
 13. [Riesgos y planes de contingencia](#13-riesgos-y-planes-de-contingencia)
 14. [Apéndices](#14-apéndices)
 15. [Linux / Steam Deck](#15-linux--steam-deck)
+16. [Sincronización de partidas entre equipos](#16-sincronización-de-partidas-entre-equipos)
+17. [Steam en Windows (Big Picture y Steam Link)](#17-steam-en-windows-big-picture-y-steam-link)
 
 ---
 
@@ -582,6 +586,7 @@ Ventana de 720×520, no redimensionable, botones **Atrás / Siguiente / Cancelar
   5. El lanzador se minimiza.
   6. Al terminar el juego, desmonta la ISO, restaura la ventana y analiza el código de salida y el tiempo de ejecución (si duró menos de 5 s → "parece que el juego no pudo arrancar", §9).
 - **Línea de comandos:** `Trampolin.exe --play FG` (usado por los accesos directos), `--install`, `--repair FG`, `--uninstall FG`, `--silent` (instalación desatendida con `settings.json`).
+- **Implementado (1.1.0):** la barra inferior real tiene *Agregar juegos…*, *Partidas ▾*, **Sincronización…** (§16), **Agregar a Steam** (§17), *Opciones…*, *Ayuda* y *Ver registro*. Si la sincronización está activa, *Jugar* trae antes la partida más reciente y, al cerrarse el juego, la sube (§16.4). Lo mismo pasa con `--play` (accesos del menú Inicio y de Steam).
 
 ### 8.4 Catálogo declarativo `games.json`
 
@@ -631,6 +636,8 @@ Variables: `{HD}`, `{CD}` (raíz de datos del CD: `E:` o `<inst>\cd\FG`), `{CDRO
 | `Start-TrGame -Id` | Preparación + lanzamiento + espera + limpieza + diagnóstico |
 | `Repair-TrGame`, `Uninstall-TrGame`, `Backup-TrSaves` | Mantenimiento a partir de `manifest.json` |
 | `Get-TrSaveFiles`, `Export-TrAllSaves`, `Read-TrSavesZip`, `Import-TrSaves` | Partidas: exportar todas en un zip, importar desde un zip de Windows o de Linux (ver §15.6). Las mismas funciones existen en `linux/trampolin/core.py` |
+| `Sync-TrBeforePlay`, `Sync-TrAfterPlay`, `Sync-TrAll`, `Test-TrSyncBundle`, `Get-TrSyncStatus` (`Trampolin.Sync.psm1`) | Sincronización de partidas (§16). Pares en `linux/trampolin/sync.py`: `before_play`, `after_play`, `sync_all`, `validate_bundle`, `status` |
+| `Add-TrToSteam`, `Update-TrSteamShortcuts`, `ConvertFrom-TrVdf`/`ConvertTo-TrVdf` (`Trampolin.Steam.psm1`) | Accesos de Steam en Windows (§17). Pares en `linux/trampolin/steam.py` |
 
 Todo lo de Core se puede testear con **Pester** sin UI (`tests\Core.Tests.ps1`), usando una ISO de prueba pequeña generada con `oscdimg`/`IMAPI2FS` y un `games.json` de prueba.
 
@@ -682,6 +689,22 @@ Todo lo de Core se puede testear con **Pester** sin UI (`tests\Core.Tests.ps1`),
 | `TR-RUN-005` | El juego no crea su ventana en 30 s | "«{juego}» está tardando demasiado en abrir." | Esperar, Cerrar juego |
 | `TR-RUN-006` | Antivirus bloquea la inyección de `trhook.dll` | "El antivirus impidió activar el modo de compatibilidad avanzado." | Usar modo básico, Cómo agregar una excepción |
 | `TR-UPD-001` | Error inesperado | "Ocurrió un error inesperado. No es tu culpa." | Copiar informe, Abrir log |
+
+Códigos agregados en la 1.1.0 (ver `strings.es.json`; todos los mensajes incluyen la causa concreta en `{detail}` o `{reason}`):
+
+| Código | Cuándo | Acciones |
+|---|---|---|
+| `TR-SYN-001` | Sin red, DNS o tiempo agotado al hablar con Google | Reintentar (antes de jugar: también *Jugar igual*) |
+| `TR-SYN-002` | La carpeta sincronizada no existe, no está conectada o no se puede leer/escribir | Reintentar |
+| `TR-SYN-003` | Token de Google vencido o revocado (`invalid_grant`, 401) o no hay cuenta vinculada | Volver a vincular… |
+| `TR-SYN-004` | Drive lleno (`storageQuotaExceeded`) | Reintentar |
+| `TR-SYN-005` | El paquete descargado no pasó la validación (§16.3) | — (antes de jugar: *Jugar igual*) |
+| `TR-SYN-006` | Error del servidor (5xx o 429 después de los reintentos) u otra respuesta inesperada | Reintentar |
+| `TR-SYN-007` | No se pudo copiar la partida descargada a la carpeta del juego | Reintentar |
+| `TR-SYN-008` | Modo Google Drive sin cliente OAuth configurado | — |
+| `TR-STM-001` | Steam no instalado o sin usuarios | — |
+| `TR-STM-002` | Steam no se cerró en 60 s | Reintentar |
+| `TR-STM-003` | No se pudo escribir `shortcuts.vdf` (queda el original) | Reintentar |
 
 Las acciones "Probar con otro modo de compatibilidad" implementan un **fallback automático escalonado**: Nivel 3 → Nivel 2 → Nivel 1, guardando el que funcionó en `settings.json`.
 
@@ -828,6 +851,8 @@ Instalación limpia; instalación con ruta personalizada con espacios; ruta con 
 | D4 Controles | Trackpad derecho = mouse (clic al presionarlo); pantalla táctil = clic en el punto tocado; teclado en pantalla (Steam + X) para el nombre del jugador |
 | D5 Partidas | Exportar en Windows → importar en el Deck → el jugador aparece con su progreso; y al revés |
 | D6 Sonido | Voces y música (MIDI) se escuchan por los parlantes y por auriculares |
+| D7 Sincronización | Con la misma carpeta (Syncthing) o la misma cuenta de Google en la PC y el Deck: jugar en uno, cerrar, abrir en el otro → aparece el progreso. Sin red: el aviso ofrece *Jugar igual* y al volver la red la partida se sube |
+| D8 Steam Link (Windows) | «Agregar a Steam» en la PC; abrir un juego desde Steam Link en el celular o la TV, con la plantilla «Teclado y mouse» |
 
 ### 11.4 Aceptación final
 
@@ -995,6 +1020,7 @@ runtime/
 ./trampolin.sh cli export-saves [<ID> …] [--out <carpeta>]      # sin IDs: todas en un zip
 ./trampolin.sh cli import-saves <zip>
 ./trampolin.sh cli steam [--no-restart] | menu
+./trampolin.sh cli sync status | now                            # §16 (se configura desde la biblioteca)
 ```
 
 ### 15.6 Formato de las copias de partidas (Windows y Linux)
@@ -1004,7 +1030,7 @@ runtime/
 | De un juego | `<ID>-AAAAMMDD-HHMMSS.zip` | los archivos sueltos (`PLYR0001.INI`, `volumes.sav`…) + `trampolin-saves.json` |
 | De todos | `trampolin-partidas-AAAAMMDD-HHMMSS.zip` | `<ID>/<archivo>` + `trampolin-saves.json` |
 
-`trampolin-saves.json` = `{ "format": 1, "createdAt", "platform": "windows"|"linux", "games": [IDs] }`. Las copias anteriores (sin ese archivo) se reconocen por el nombre del zip.
+`trampolin-saves.json` = `{ "format": 1, "createdAt", "platform": "windows"|"linux", "games": [IDs] }`. Las copias anteriores (sin ese archivo) se reconocen por el nombre del zip. Los paquetes de la sincronización usan `format: 2` (§16.2) y también se pueden importar a mano.
 
 Al importar:
 
@@ -1022,3 +1048,110 @@ Los INI de configuración que forman parte de las partidas (`PRE_K.INI`, `4G.INI
 Los dos empaquetadores (`build.ps1` y `build.sh`) generan el mismo ZIP: mismos archivos en el mismo orden, rutas con `/` y permisos de Unix (`trampolin.sh` ejecutable), así que el paquete armado en Windows se descomprime bien en el Steam Deck (Ark, file-roller, `unzip`) y viceversa. `build.ps1` falla si alguna ruta queda con `\` o si `trampolin.sh` no queda ejecutable. La versión por defecto de ambos sale de `runtime/VERSION`, y `.gitattributes` fija LF para `*.sh`/`*.py` y CRLF para `*.cmd`.
 
 > Los binarios de `native/bin` del repositorio son los de MSVC (1.0.9): `build.ps1` + `tests\Run-Tests.ps1` pasaron en Windows (17/17, con las ISOs) después de los cambios #18-#21, que se habían validado en el Steam Deck con la compilación de Zig.
+
+---
+
+## 16. Sincronización de partidas entre equipos
+
+> 1.1.0. Mismo comportamiento en Windows (`src/Core/Trampolin.Sync.psm1`, `src/UI/Sync.ps1`) y en Linux (`linux/trampolin/sync.py`, `ui.py`). Reglas y límites compartidos en `src/data/sync.json`. Si se cambia una regla, hay que cambiar los dos.
+
+### 16.1 Por qué no una carpeta pública de Drive
+
+La idea inicial era una carpeta pública de Google Drive sin iniciar sesión. Se descartó por dos motivos:
+
+- **La API de Drive no permite subir archivos sin autenticarse**, ni siquiera a una carpeta compartida con «cualquiera con el enlace puede editar». Solo se pueden descargar archivos públicos de forma anónima.
+- **Una carpeta pública expone a los chicos.** Los `PLYR*.INI` traen el nombre del jugador (codificado, pero no cifrado), y cualquiera con el enlace podría leerlos o reemplazarlos.
+
+En su lugar hay dos modos, que se eligen en *Sincronización…*:
+
+| Modo | Cómo | Ventajas | Límites |
+|---|---|---|---|
+| `folder` — carpeta sincronizada | `<carpeta>/Trampolin-sync/<ID>.zip`. La copia entre equipos la hace otro programa: Google Drive para escritorio, OneDrive, Dropbox, Syncthing, una carpeta de red o un pendrive | Sin cuentas ni red dentro de Trampolín; sirve con cualquier nube | En el Steam Deck hace falta Syncthing o rclone. Puede haber demoras hasta que el otro programa copie el archivo |
+| `drive` — Google Drive | API REST de Drive v3 en **`appDataFolder`** (carpeta oculta y privada de la app), con el scope `drive.appdata`. Se vincula con el **flujo OAuth para dispositivos** (código en pantalla + `google.com/device`), que funciona también en el Modo Juego del Deck | Directo, privado, sin programas extra | Requiere un cliente OAuth propio (§16.6) |
+
+### 16.2 Paquete
+
+Un zip por juego: los archivos de partida sueltos + `trampolin-saves.json` con `format: 2`:
+
+```json
+{ "format": 2, "createdAt": "2026-10-23T14:00:00Z", "platform": "windows", "games": ["FG"], "gameId": "FG",
+  "updatedAt": "2026-10-23T13:58:12Z", "deviceId": "<uuid>", "deviceName": "PC-ESCRITORIO",
+  "bundleHash": "<sha256>", "files": [ { "name": "plyr8999.ini", "size": 4559, "sha256": "<sha256>", "mtime": "2026-10-23T13:58:12Z" } ] }
+```
+
+- **Qué se sincroniza:** los patrones `saves` de `games.json`, menos `~~ka.swp` y lo que liste `syncExclude`: los INI de configuración de PEEWEE (`PRE_K.INI`, `4G.INI`), que tienen las rutas de cada equipo.
+- **`updatedAt`** = el `mtime` más reciente de los archivos (UTC, en segundos), no la hora de subida. Al aplicar un paquete se restauran los `mtime`, así que los dos equipos calculan lo mismo.
+- **`bundleHash`** = sha256 de las líneas `nombre-en-minúsculas:sha256` ordenadas, unidas con `\n`. Es igual en Windows y Linux aunque cambien las mayúsculas del nombre.
+- En modo `drive`, `bundleHash`, `updatedAt` y `deviceName` van también en `appProperties` del archivo, para decidir con un solo `files.list`.
+
+### 16.3 Validación de lo descargado (`validate_bundle` / `Test-TrSyncBundle`)
+
+Todo lo que llega de la carpeta o de Drive se considera **no confiable**. Se valida en memoria antes de escribir nada, y una sola falla rechaza el paquete entero con `TR-SYN-005` y el motivo:
+
+1. **Zip:** como mucho 2 MB y 64 entradas. Sin carpetas, rutas, `..`, `:` (flujos alternativos de NTFS), caracteres de control ni nombres repetidos aunque solo difieran en mayúsculas. Sin entradas cifradas y solo con compresión *stored* o *deflate*.
+2. **Tamaños:** se leen con límite real mientras se descomprime (no se confía en el encabezado): 1 MB por archivo y 4 MB en total. Además, compresión de 100:1 como máximo en archivos de más de 64 KB (bombas de compresión).
+3. **Manifiesto:** esquema exacto (ni claves de más ni de menos). `gameId` tiene que ser el juego que se va a abrir. La lista de archivos tiene que coincidir exactamente con el zip, el `sha256` de cada uno y `bundleHash` tienen que coincidir (y, en Drive, también con `appProperties`). Fechas ISO válidas y no más de 1 día en el futuro.
+4. **Nombres:** cada archivo tiene que ser una partida del juego (patrones `saves` sin `syncExclude`).
+5. **Contenido:** no puede ser un ejecutable (`MZ` con encabezado `PE`/`NE`/`LE`/`LX`, ELF, `#!`, Mach-O, Java) ni un contenedor (zip, cab, rar, 7z, OLE). Los `.INI` tienen que ser texto (sin bytes de control salvo tab/CR/LF), con líneas de 4096 caracteres como máximo, y cada línea tiene que ser `[sección]`, `clave=valor`, comentario o vacía. Los `.SAV`/`.DAT`/`volumes.sav`/`ka.atr` no tienen formato documentado: solo se controlan por tamaño y firma.
+6. **Aplicar:** solo después de validar todo. Se hace copia de seguridad (`Backup-TrSaves`) y se escribe cada archivo con temporal + renombrar. Nunca se ejecuta nada de lo descargado.
+
+Un paquete inválido **frena el juego** (aviso antes de jugar, con *Jugar igual*), pero **no impide guardar**: al cerrar el juego se reemplaza por la partida local.
+
+### 16.4 Decisiones (`sync_game` / `Sync-TrGame`)
+
+Estado local por juego en `sync-state.json`, en la carpeta de configuración: `lastSyncedHash`, `lastSyncedUpdatedAt`, `lastSyncAt`, `pendingUpload` y `lastDevice`.
+
+| Momento | Regla |
+|---|---|
+| Antes de jugar (`download`) | Si el hash remoto es igual al local, no se hace nada. Si el remoto es más nuevo, se descarga, se valida, se guarda copia de la partida local y se aplica. Si la local es más nueva, se juega con ella y queda pendiente de subir. Si falla: aviso con *Reintentar* / *Jugar igual* / *Cerrar* (no jugar) |
+| Al cerrar (`upload`) | Si cambió algo desde la última sincronización (o había algo pendiente), se sube. Si el remoto parece más nuevo, se descarga y se valida primero: si de verdad es más nuevo, no se pisa y se usa en el próximo inicio. **Conflicto** (otro equipo subió algo desde nuestra última sincronización y la nuestra es más nueva): se sube la nuestra y la otra se guarda en «Trampolín - partidas» como `<ID>-conflicto-<equipo>-<fecha>.zip` (es un zip importable). Si falla: aviso con la causa, la partida queda pendiente y se reintenta en la próxima sincronización |
+| *Sincronizar ahora* | Las dos cosas, para cada juego instalado. Se corta ante `TR-SYN-001`/`003`/`008` |
+
+Se compara `updatedAt` entre equipos, así que importa que los relojes estén razonablemente en hora (Windows y SteamOS los sincronizan solos). Nunca se borra una partida sin dejar una copia.
+
+### 16.5 Google Drive en detalle
+
+- **Vincular:** `POST /device/code` (`client_id`, `scope = openid email …/drive.appdata`) → se muestra `user_code` y `verification_url` → se consulta `POST /token` (`grant_type=urn:ietf:params:oauth:grant-type:device_code`) cada `interval` segundos, respetando `slow_down`. El correo sale del `id_token` y solo se usa para mostrarlo.
+- **Token de actualización:** `sync-token.json` en la carpeta de configuración. En Windows se cifra con **DPAPI** (`ProtectedData`, CurrentUser); en Linux queda con permisos `0600`. *Desvincular* lo borra y llama a `/revoke`.
+- **Archivos:** `GET drive/v3/files?spaces=appDataFolder`, `GET files/<id>?alt=media`, y subida multipart con `POST upload/drive/v3/files` (con `parents: ["appDataFolder"]`) o `PATCH upload/drive/v3/files/<id>`.
+- **Transporte:** `HttpClient` con TLS 1.2 (Windows) y `urllib` (Linux), con timeout de 15 s. Reintentos con espera creciente ante 429, 5xx y `rateLimitExceeded` (3 reintentos). Ante un 401 se renueva el token una vez. Los errores se traducen a `TR-SYN-001…008` con la causa concreta.
+
+### 16.6 Configurar el cliente OAuth (una sola vez, quien arma el paquete)
+
+1. En Google Cloud Console: crear un proyecto → *APIs y servicios* → habilitar **Google Drive API**.
+2. *Pantalla de consentimiento de OAuth*: tipo **Externo**, nombre «Trampolín», scopes `openid`, `email` y `.../auth/drive.appdata`. **Publicar la app** (estado «En producción»): en modo de prueba los tokens vencen a los 7 días y solo pueden entrar los usuarios de prueba. `drive.appdata` no es un scope restringido, así que no hace falta la verificación completa.
+3. *Credenciales* → *Crear ID de cliente de OAuth* → tipo **TVs and Limited Input devices**.
+4. Copiar `client_id` y `client_secret` a `src/data/sync.json` (`google.clientId` / `google.clientSecret`) y volver a empaquetar. Para este tipo de cliente Google no considera secreto el `client_secret`. Para probar sin reempaquetar sirven las variables `TRAMPOLIN_GOOGLE_CLIENT_ID` / `TRAMPOLIN_GOOGLE_CLIENT_SECRET`.
+
+Sin `clientId`, la opción Google Drive aparece deshabilitada («No disponible en esta copia del programa») y el modo carpeta sigue funcionando.
+
+### 16.7 Pruebas
+
+- `tests/Run-Tests.ps1` y `tests/test_linux.py` prueban:
+  - el validador con paquetes maliciosos: rutas, otro juego, archivos de más o de menos, hash, fecha futura, clave extra, ejecutable, zip dentro, INI binario o raro, bomba de compresión, demasiados archivos, nombres repetidos;
+  - el modo carpeta entre dos instalaciones falsas: ida y vuelta, que gane la más reciente, conflicto, `syncExclude`, carpeta inexistente → `TR-SYN-002` y pendiente, paquete inválido que frena el juego pero no la subida;
+  - Google Drive contra un servidor falso: un `http.server` local en Python y un transporte falso en PowerShell (vinculación, subida y actualización del mismo archivo, descarga en otro equipo, reintentos, cuota, token vencido, sin red, sin configurar).
+- **Compatibilidad entre plataformas:** `tests/fixtures/sync-linux-FG.zip` (hecho por Python) lo valida PowerShell, y `sync-windows-FG.zip` (hecho por PowerShell) lo valida Python.
+- **Falta validar a mano:** la vinculación real con Google (requiere el cliente OAuth de §16.6), Syncthing entre la PC y el Deck, y la sincronización durante el juego real.
+
+---
+
+## 17. Steam en Windows (Big Picture y Steam Link)
+
+> 1.1.0. `src/Core/Trampolin.Steam.psm1` (port de `linux/trampolin/steam.py`) y `src/UI/Steam.ps1`.
+
+- **Dónde:** Steam se ubica con `HKCU\Software\Valve\Steam\SteamPath` (o `HKLM\…\WOW6432Node\Valve\Steam\InstallPath`), y se escribe `userdata\<id>\config\shortcuts.vdf` de cada usuario que inició sesión.
+- **Formato:** el mismo VDF binario y el mismo `appid` (`crc32(exe + nombre) | 0x80000000`, con signo) que en Linux. El lector y el escritor están en C# (`TrVdf`), y se compilan recién al usarlos para no demorar el arranque. Un tipo VDF desconocido aborta sin escribir. Verificado con `tests/fixtures/shortcuts-linux.vdf`: PowerShell lo reescribe byte por byte igual y calcula el mismo `appid` que Python.
+- **Accesos:**
+  - Uno para «Biblioteca Trampolín» y uno por juego («Trampolín - <nombre>»).
+  - `Exe` = `"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"`.
+  - `LaunchOptions` = los mismos argumentos que los `.lnk` del menú Inicio (`-NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "<inst>\app\src\Trampolin.ps1" --play <ID>`).
+  - `StartDir` = la instalación. El ícono es el `.exe` del juego.
+  - `AllowDesktopConfig=1`, para que en Steam Link el control use la configuración de escritorio (mouse), y el tag «Trampolín».
+- **Reemplazo:** los accesos propios se reconocen porque `LaunchOptions` contiene `Trampolin.ps1` (o, para los de Linux, porque `Exe` termina en `/trampolin.sh`) y se reemplazan sin duplicar, conservando `LastPlayTime`. Los demás accesos del usuario no se tocan, y la primera vez se guarda `shortcuts.vdf.trampolin.bak`.
+- **Steam abierto:** Steam reescribe `shortcuts.vdf` al cerrarse, así que se pide confirmación, se ejecuta `steam.exe -shutdown`, se espera hasta 60 s (`TR-STM-002`) y se vuelve a abrir.
+- **Integración:**
+  - casilla «Agregar también a Steam» en el asistente (deshabilitada si no hay Steam) y botón **Agregar a Steam** en la biblioteca;
+  - al instalar o desinstalar juegos, `Update-TrSteamShortcuts` actualiza los accesos solo donde ya estaban y solo con Steam cerrado (si no, avisa);
+  - los accesos usan `--play`, así que la sincronización de §16 también funciona desde Steam Link.
+- **Falta validar a mano:** que Steam muestre los accesos e íconos, que Big Picture y Steam Link abran los juegos a pantalla completa, y la plantilla de control «Teclado y mouse».

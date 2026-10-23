@@ -62,7 +62,8 @@
         }
       },
       "kaIni": {},
-      "saves": [ "*.INI", "*.SAV" ]
+      "saves": [ "*.INI", "*.SAV" ],
+      "syncExclude": [ "PRE_K.INI" ]
     },
     {
       "id": "KG",
@@ -167,7 +168,8 @@
         }
       },
       "kaIni": {},
-      "saves": [ "*.INI", "*.SAV" ]
+      "saves": [ "*.INI", "*.SAV" ],
+      "syncExclude": [ "4G.INI" ]
     }
   ]
 }

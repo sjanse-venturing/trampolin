@@ -7,11 +7,12 @@ import queue
 import shutil
 import subprocess
 import threading
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, ttk
 
-from . import core, errors, proton, steam
+from . import core, errors, proton, steam, sync
 from .errors import TrError, Cancelled
 
 PRIMARY = '#E64832'      # rojo Trampolín
@@ -320,6 +321,290 @@ def add_to_steam(owner, theme, root):
     show_info(owner, theme, 'Listo', 'Los juegos aparecen en Steam, en la colección «Trampolín» y en «No de Steam». '
               'En el Modo Juego, buscalos en la Biblioteca → No de Steam.')
     return True
+
+
+# ---------------------------------------------------------------------------
+# Sincronización de partidas
+# ---------------------------------------------------------------------------
+
+def sync_before_play(owner, theme, gid, root, cfg):
+    """Antes de jugar: trae la partida más reciente. Devuelve True para jugar, False para no jugar."""
+    if not sync.enabled(cfg) or gid not in core.get_manifest(root)['games']:
+        return True
+    name = core.game(gid)['name']
+    while True:
+        res, err = run_with_progress(owner, theme, 'Buscando la partida más reciente de «%s»…' % name,
+                                     lambda p, c: (p(None, 'Conectando…'), sync.before_play(gid, root, cfg))[1])
+        if not err:
+            errors.log('Info', 'Sincronización antes de jugar: %s' % res.message)
+            return True
+        info = errors.error_info(err)
+        info.message += '\n\nPodés jugar igual con la partida de este equipo: al cerrar el juego se va a guardar en la sincronización.'
+        info.actions = ['playlocal', 'retry'] + (['relink'] if info.code == 'TR-SYN-003' else []) + ['details']
+        action = show_error(owner, theme, info)
+        if action == 'playlocal':
+            return True
+        if action == 'relink':
+            SyncDialog(owner, theme, cfg, root).run()
+            continue
+        if action != 'retry':
+            return False
+
+
+def sync_after_play(owner, theme, gid, root, cfg):
+    """Al cerrar el juego: sube la partida. Muestra el error con la causa si no se pudo."""
+    if not sync.enabled(cfg) or gid not in core.get_manifest(root)['games']:
+        return None
+    name = core.game(gid)['name']
+    while True:
+        res, err = run_with_progress(owner, theme, 'Guardando la partida de «%s» en la sincronización…' % name,
+                                     lambda p, c: (p(None, 'Conectando…'), sync.after_play(gid, root, cfg))[1])
+        if not err:
+            errors.log('Info', 'Sincronización al cerrar: %s' % res.message)
+            if res.conflict:
+                show_info(owner, theme, 'Había otra partida más vieja',
+                          'Otro equipo había guardado una partida de «%s» que no llegaste a usar. Se guardó la tuya (es la más '
+                          'reciente) y la otra quedó en:\n%s' % (name, res.conflict))
+            return res
+        info = errors.error_info(err)
+        info.message += '\n\nLa partida quedó guardada en este equipo y se va a subir la próxima vez que se sincronice.'
+        info.actions = ['retry'] + (['relink'] if info.code == 'TR-SYN-003' else []) + ['details']
+        action = show_error(owner, theme, info)
+        if action == 'relink':
+            SyncDialog(owner, theme, cfg, root).run()
+            continue
+        if action != 'retry':
+            return None
+
+
+class LinkDialog(Dialog):
+    """Vincular Google Drive con un código (sirve en el Steam Deck: se autoriza desde el celular)."""
+
+    def __init__(self, owner, theme, backend):
+        super().__init__(owner, theme, 680, 400)
+        self.backend = backend
+        self.cancel = threading.Event()
+        self.q = queue.Queue()
+        label(self, 'Vincular Google Drive', font=theme.big).pack(anchor='w', padx=22, pady=(18, 6))
+        self.msg = label(self, 'Pidiendo un código a Google…', wrap=630)
+        self.msg.pack(anchor='w', padx=22)
+        self.code = label(self, '', font=theme.title, fg=PRIMARY)
+        self.code.pack(anchor='w', padx=22, pady=12)
+        self.url = label(self, '', font=theme.bold)
+        self.url.pack(anchor='w', padx=22)
+        label(self, 'Las partidas se guardan en una carpeta privada de la app: no aparecen en tu Drive ni las puede ver nadie más.',
+              fg=MUTED, font=theme.small, wrap=630).pack(anchor='w', padx=22, pady=(12, 0))
+        b = tk.Frame(self, bg=BACK)
+        b.pack(side='bottom', fill='x', padx=22, pady=16)
+        ttk.Button(b, text='Cancelar', command=self.on_cancel).pack(side='right')
+        self.btn_open = ttk.Button(b, text='Abrir el navegador', state='disabled', command=lambda: open_path(self.verification))
+        self.btn_open.pack(side='right', padx=8)
+        self.btn_copy = ttk.Button(b, text='Copiar el código', state='disabled', command=self.copy)
+        self.btn_copy.pack(side='right')
+        self.protocol('WM_DELETE_WINDOW', self.on_cancel)
+        self.verification = ''
+        threading.Thread(target=self.work, daemon=True).start()
+        self.after(200, self.poll)
+
+    def copy(self):
+        self.clipboard_clear()
+        self.clipboard_append(self.code.cget('text'))
+        self.btn_copy.configure(text='Copiado ✓')
+
+    def work(self):
+        try:
+            d = self.backend.start_link()
+            self.q.put(('code', d))
+            interval = int(d.get('interval', 5))
+            deadline = time.time() + int(d.get('expires_in', 900))
+            while not self.cancel.is_set() and time.time() < deadline:
+                if self.cancel.wait(interval):
+                    return
+                r = self.backend.poll_link(d['device_code'])
+                if r == 'slow_down':
+                    interval += 5
+                elif r != 'pending':
+                    self.q.put(('ok', r))
+                    return
+            if not self.cancel.is_set():
+                raise TrError('TR-SYN-003', Exception('expired_token'), detail='no se autorizó el acceso a tiempo')
+        except Exception as e:
+            self.q.put(('error', e))
+
+    def poll(self):
+        try:
+            while True:
+                kind, v = self.q.get_nowait()
+                if kind == 'code':
+                    self.verification = v['verification_url']
+                    self.msg.configure(text='1. En el celular o en la computadora, entrá a la dirección de abajo.\n'
+                                            '2. Iniciá sesión con tu cuenta de Google y escribí este código:')
+                    self.code.configure(text=v['user_code'])
+                    self.url.configure(text=self.verification)
+                    self.btn_copy.configure(state='normal')
+                    self.btn_open.configure(state='normal')
+                elif kind == 'ok':
+                    self.close(v)
+                    return
+                elif kind == 'error':
+                    self.close(None)
+                    show_error(self.master, self.theme, v)
+                    return
+        except queue.Empty:
+            pass
+        if self.winfo_exists():
+            self.after(300, self.poll)
+
+    def on_cancel(self):
+        self.cancel.set()
+        self.close(None)
+
+
+class SyncDialog(Dialog):
+    """«Sincronización…»: elegir el modo, vincular, probar y ver el estado de cada juego."""
+
+    def __init__(self, owner, theme, cfg, root):
+        super().__init__(owner, theme, 900, 700)
+        self.cfg, self.root = cfg, root
+        s = sync.sync_config(cfg)
+        self.drive = sync.DriveBackend()
+        label(self, 'Sincronización de partidas', font=theme.big).pack(anchor='w', padx=22, pady=(16, 2))
+        label(self, 'Cuando está activada, al abrir un juego se usa la partida más reciente de todos tus equipos, y al '
+                    'cerrarlo se guarda la tuya.', wrap=850).pack(anchor='w', padx=22)
+        self.mode = tk.StringVar(value=s['mode'])
+        modes = tk.Frame(self, bg=BACK)
+        modes.pack(fill='x', padx=22, pady=(10, 0))
+        ttk.Radiobutton(modes, text='Desactivada', value='off', variable=self.mode, command=self.refresh).pack(anchor='w')
+        ttk.Radiobutton(modes, text='Carpeta sincronizada (Google Drive para escritorio, OneDrive, Dropbox, Syncthing, pendrive…)',
+                        value='folder', variable=self.mode, command=self.refresh).pack(anchor='w', pady=(4, 0))
+        row = tk.Frame(modes, bg=BACK)
+        row.pack(fill='x', padx=26, pady=2)
+        self.folder = tk.StringVar(value=s.get('folder') or '')
+        self.ent_folder = ttk.Entry(row, textvariable=self.folder)
+        self.ent_folder.pack(side='left', fill='x', expand=True, ipady=3)
+        self.btn_folder = ttk.Button(row, text='Examinar…', command=self.browse)
+        self.btn_folder.pack(side='left', padx=6)
+        self.rb_drive = ttk.Radiobutton(modes, text='Google Drive (iniciando sesión una vez con un código)', value='drive',
+                                        variable=self.mode, command=self.refresh)
+        self.rb_drive.pack(anchor='w', pady=(8, 0))
+        row = tk.Frame(modes, bg=BACK)
+        row.pack(fill='x', padx=26, pady=2)
+        self.lbl_drive = label(row, '', fg=MUTED)
+        self.lbl_drive.pack(side='left')
+        self.btn_unlink = ttk.Button(row, text='Desvincular', command=self.unlink)
+        self.btn_unlink.pack(side='right')
+        self.btn_link = ttk.Button(row, text='Vincular…', command=self.link)
+        self.btn_link.pack(side='right', padx=6)
+        row = tk.Frame(self, bg=BACK)
+        row.pack(fill='x', padx=22, pady=(12, 0))
+        label(row, 'Nombre de este equipo:').pack(side='left')
+        self.device = tk.StringVar(value=s['deviceName'])
+        ttk.Entry(row, textvariable=self.device, width=30).pack(side='left', padx=8, ipady=3)
+        self.tree = ttk.Treeview(self, columns=('game', 'local', 'sync', 'state'), show='headings', height=8)
+        for c, t, w in (('game', 'Juego', 330), ('local', 'Partida de este equipo', 190), ('sync', 'Última sincronización', 190),
+                        ('state', 'Estado', 120)):
+            self.tree.heading(c, text=t)
+            self.tree.column(c, width=w)
+        self.tree.pack(fill='both', expand=True, padx=22, pady=10)
+        b = tk.Frame(self, bg=BACK)
+        b.pack(side='bottom', fill='x', padx=22, pady=(0, 16))
+        ttk.Button(b, text='Guardar', style='Primary.TButton', command=self.save).pack(side='right')
+        ttk.Button(b, text='Cancelar', command=self.close).pack(side='right', padx=8)
+        ttk.Button(b, text='Probar conexión', command=self.test).pack(side='left')
+        ttk.Button(b, text='Sincronizar ahora', command=self.sync_now).pack(side='left', padx=8)
+        self.refresh()
+
+    def refresh(self):
+        folder = self.mode.get() == 'folder'
+        self.ent_folder.configure(state='normal' if folder else 'disabled')
+        self.btn_folder.configure(state='normal' if folder else 'disabled')
+        email = self.drive.linked_email()
+        if not sync.drive_available():
+            self.lbl_drive.configure(text='No disponible en esta copia del programa (falta configurar el acceso a Google).')
+            self.rb_drive.state(['disabled'])
+            self.btn_link.state(['disabled'])
+        else:
+            self.lbl_drive.configure(text='Vinculado con %s' % email if email else 'Sin vincular')
+            self.btn_link.configure(text='Cambiar de cuenta…' if email else 'Vincular…')
+        self.btn_unlink.configure(state='normal' if email else 'disabled')
+        self.tree.delete(*self.tree.get_children())
+        for gid, name, local, last, pending in sync.status(self.root):
+            self.tree.insert('', 'end', values=(name, sync.describe(local), sync.describe(last),
+                                                'Sin partidas' if not local else ('Pendiente' if pending else 'Al día')))
+
+    def browse(self):
+        d = ask_directory(self, 'Carpeta sincronizada', self.folder.get() or os.path.expanduser('~'))
+        if d:
+            self.folder.set(d)
+
+    def link(self):
+        email = LinkDialog(self, self.theme, self.drive).run()
+        if email:
+            self.mode.set('drive')
+            show_info(self, self.theme, 'Google Drive vinculado', 'Listo: las partidas se van a guardar en la cuenta %s.' % email)
+        self.refresh()
+
+    def unlink(self):
+        if confirm(self, self.theme, '¿Desvincular Google Drive?', 'Este equipo deja de sincronizar con esa cuenta. Las partidas '
+                   'que ya están en Drive y las de este equipo no se borran.', 'Desvincular', 'Cancelar'):
+            self.drive.unlink()
+            if self.mode.get() == 'drive':
+                self.mode.set('off')
+            self.refresh()
+
+    def apply(self):
+        """Valida y guarda la configuración. Devuelve False si falta algo."""
+        mode = self.mode.get()
+        if mode == 'folder' and not os.path.isdir(self.folder.get()):
+            show_info(self, self.theme, 'Elegí la carpeta', 'Elegí una carpeta que exista (por ejemplo, la de Google Drive para escritorio).')
+            return False
+        if mode == 'drive' and not self.drive.linked_email():
+            show_info(self, self.theme, 'Falta vincular la cuenta', 'Tocá «Vincular…» para conectar tu cuenta de Google.')
+            return False
+        s = sync.sync_config(self.cfg)
+        s.update({'mode': mode, 'folder': self.folder.get() or None, 'deviceName': (self.device.get().strip() or s['deviceName'])[:64]})
+        core.save_config(self.cfg)
+        return True
+
+    def test(self):
+        if not self.apply():
+            return
+        backend = sync.backend_for(self.cfg)
+        if backend is None:
+            show_info(self, self.theme, 'Sincronización desactivada', 'Elegí una carpeta o Google Drive para probar la conexión.')
+            return
+        _, err = run_with_progress(self, self.theme, 'Probando la conexión…', lambda p, c: backend.check())
+        if err:
+            show_error(self, self.theme, err)
+        else:
+            show_info(self, self.theme, 'Todo bien', 'La sincronización funciona.')
+
+    def sync_now(self):
+        if not self.apply():
+            return
+        if sync.backend_for(self.cfg) is None:
+            show_info(self, self.theme, 'Sincronización desactivada', 'Elegí una carpeta o Google Drive para sincronizar.')
+            return
+        if core.running_game(self.root):
+            show_error(self, self.theme, TrError('TR-RUN-001'))
+            return
+        res, err = run_with_progress(self, self.theme, 'Sincronizando las partidas…', lambda p, c: sync.sync_all(self.root, self.cfg, on_progress=p))
+        self.refresh()
+        if err:
+            show_error(self, self.theme, err)
+            return
+        failed = [i for _, r, i in res if i]
+        lines = ['✔ ' + r.message if r else '✖ %s: %s' % (core.game(g)['name'], i.title) for g, r, i in res]
+        conflicts = [r.conflict for _, r, _ in res if r and r.conflict]
+        if conflicts:
+            lines += ['', 'Las partidas que perdieron quedaron en «%s».' % os.path.dirname(conflicts[0])]
+        show_info(self, self.theme, 'Sincronización terminada' if not failed else 'Sincronización con errores', '\n'.join(lines))
+        if failed:
+            show_error(self, self.theme, failed[0])
+
+    def save(self):
+        if self.apply():
+            self.close(True)
 
 
 # ---------------------------------------------------------------------------
@@ -699,6 +984,7 @@ class Library:
         ttk.Button(bar, text='Agregar juegos…', command=self.add_games).pack(side='left', padx=(16, 6), pady=10)
         self.btn_saves = ttk.Button(bar, text='Partidas ▾', command=self.saves_menu)
         self.btn_saves.pack(side='left', padx=6)
+        ttk.Button(bar, text='Sincronización…', command=self.sync_dialog).pack(side='left', padx=6)
         ttk.Button(bar, text='Agregar a Steam', command=lambda: add_to_steam(self.win, theme, self.root)).pack(side='left', padx=6)
         ttk.Button(bar, text='Opciones…', command=self.options).pack(side='left', padx=6)
         ttk.Button(bar, text='Ayuda', command=self.help).pack(side='left', padx=6)
@@ -802,6 +1088,12 @@ class Library:
         b = self.btn_saves
         m.tk_popup(b.winfo_rootx(), b.winfo_rooty() - 4 - 3 * 36)
 
+    def sync_dialog(self):
+        if self.session:
+            show_error(self.win, self.theme, TrError('TR-RUN-001'))
+            return
+        SyncDialog(self.win, self.theme, self.cfg, self.root).run()
+
     def open_saves_dir(self):
         os.makedirs(core.saves_dir(), exist_ok=True)
         open_path(core.saves_dir())
@@ -809,6 +1101,8 @@ class Library:
     def play(self, gid):
         if self.session:
             show_error(self.win, self.theme, TrError('TR-RUN-001'))
+            return
+        if not sync_before_play(self.win, self.theme, gid, self.root, self.cfg):
             return
         for _ in range(3):
             session, err = start_with_progress(self.win, self.theme, gid, self.root, self.cfg)
@@ -839,6 +1133,7 @@ class Library:
             self.win.deiconify()
             self.win.lift()
             self.refresh()
+            sync_after_play(self.win, self.theme, gid, self.root, self.cfg)
             if diag:
                 if show_error(self.win, self.theme, diag) == 'repair':
                     self.repair(gid)
@@ -1046,10 +1341,14 @@ def play(gid):
         if core.find_game_id(gid) is None:
             raise TrError('TR-RUN-006', game=gid)
         gid = core.find_game_id(gid)
+        if not sync_before_play(tkroot, theme, gid, root_dir, cfg):
+            tkroot.destroy()
+            return 0
         session, err = start_with_progress(tkroot, theme, gid, root_dir, cfg)
         if err:
             raise err
         diag = proton.complete_game(session)
+        sync_after_play(tkroot, theme, gid, root_dir, cfg)
         if diag:
             raise diag
     except Exception as e:

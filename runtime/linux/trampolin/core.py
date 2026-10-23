@@ -92,10 +92,13 @@ def write_json(path, value):
 def get_config():
     cfg = read_json(CONFIG_FILE) or {}
     defaults = {'installRoot': None, 'isoFolder': None, 'dataMode': 'copy', 'scale': 0, 'proton': None,
-                'steamShortcuts': True, 'menuShortcuts': True}
+                'steamShortcuts': True, 'menuShortcuts': True,
+                'sync': {'mode': 'off', 'folder': None, 'deviceId': None, 'deviceName': None}}
     for k, v in defaults.items():
         if cfg.get(k) is None:
             cfg[k] = v
+    if not isinstance(cfg['sync'], dict):
+        cfg['sync'] = dict(defaults['sync'])
     return cfg
 
 
@@ -126,6 +129,8 @@ def xdg_dir(kind, fallback):
 
 def saves_dir():
     """Carpeta de copias de partidas (como Documentos\\Trampolín - partidas en Windows)."""
+    if os.environ.get('TRAMPOLIN_SAVES_DIR'):     # para las pruebas
+        return os.environ['TRAMPOLIN_SAVES_DIR']
     return os.path.join(xdg_dir('DOCUMENTS', '~/Documents'), 'Trampolín - partidas')
 
 
@@ -703,7 +708,11 @@ def running_game(root):
     """PID de un juego de Trampolín en ejecución (busca su ejecutable en la línea de comandos), o None."""
     needle = ('%s\\games\\' % WIN_ROOT).lower().encode()
     needle2 = os.path.join(root, 'games', '').lower().encode() if root else None
-    for pid in os.listdir('/proc'):
+    try:
+        pids = os.listdir('/proc')
+    except OSError:     # sin /proc (por ejemplo, al correr las pruebas en Windows)
+        return None
+    for pid in pids:
         if not pid.isdigit():
             continue
         try:
