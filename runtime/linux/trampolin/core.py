@@ -474,17 +474,30 @@ def install_runtime_files(root):
     os.makedirs(os.path.join(app, 'native', 'bin'), exist_ok=True)
     for f in ('trlaunch.exe', 'trhook.dll', 'WING32.DLL'):
         shutil.copy2(os.path.join(native_bin(), f), os.path.join(app, 'native', 'bin', f))
-    for f in ('trampolin.sh', 'Trampolin.cmd', 'LEEME-RUNTIME.md'):
+    for f in ('trampolin.sh', 'Trampolin.cmd'):
         p = os.path.join(APP_ROOT, f)
         if os.path.exists(p):
             shutil.copy2(p, os.path.join(app, f))
     sh = os.path.join(app, 'trampolin.sh')
     if os.path.exists(sh):
         os.chmod(sh, 0o755)
-    doc = os.path.join(APP_ROOT, 'LEEME-RUNTIME.md')
-    if os.path.exists(doc):
-        shutil.copy2(doc, os.path.join(root, 'LEEME-RUNTIME.md'))
+    # Documento de usuario: LEEME.txt en un paquete, README.md de la raíz del repositorio en desarrollo.
+    doc = next((p for p in (os.path.join(APP_ROOT, 'LEEME.txt'), os.path.join(os.path.dirname(APP_ROOT), 'README.md'))
+                if os.path.exists(p)), None)
+    for d in (app, root):
+        if doc:
+            shutil.copy2(doc, os.path.join(d, 'LEEME.txt'))
+        old = os.path.join(d, 'LEEME-RUNTIME.md')       # nombre anterior
+        if os.path.exists(old):
+            os.remove(old)
     return app
+
+
+def guide_path(root=None):
+    """Documento de usuario: el de la instalación, el de esta copia (LEEME.txt) o el README.md del repositorio."""
+    cands = ([os.path.join(root, 'LEEME.txt')] if root else []) + [
+        os.path.join(APP_ROOT, 'LEEME.txt'), os.path.join(os.path.dirname(APP_ROOT), 'README.md')]
+    return next((p for p in cands if os.path.exists(p)), None)
 
 
 def launcher_script(root):
@@ -537,6 +550,10 @@ def install_game(gid, iso_path, root, on_progress=None, cancel=None, repair=Fals
         m['games'][gid] = {'id': gid, 'name': g['name'], 'dataMode': 'copy', 'isoPath': iso_path, 'label': label,
                            'hd': hd, 'cd': cd, 'installedAt': datetime.datetime.now().isoformat(timespec='seconds')}
         save_manifest(root, m)
+        try:
+            save_art_source(gid, root)
+        except Exception as e:
+            log('Warn', 'No se pudo guardar la imagen del artwork de %s: %s' % (gid, e))
         progress(100, '%s: listo.' % g['name'])
 
     errors.step('Instalar ' + gid, action, 'TR-CPY-001', rollback, game=g['name'], file='')
@@ -555,6 +572,79 @@ def installed_games(root):
         return []
     m = get_manifest(root)
     return [InstalledGame(g, m['games'][g['id']]) for g in catalog() if g['id'] in m['games']]
+
+
+def local_path(base, rel):
+    """Ruta local de una ruta relativa al estilo Windows (a\\b\\c), resolviendo mayúsculas en cada nivel."""
+    p = base
+    for part in [x for x in rel.replace('/', '\\').split('\\') if x]:
+        p = os.path.join(p, find_case(p, part))
+    return p
+
+
+ART_SOURCE_MAX = 8 * 1024 * 1024
+
+
+def save_art_source(gid, root):
+    """Guarda en <root>/games/<ID>/art/picture.bmp la imagen del disco que usa el artwork de Steam (receta «art»
+    de games.json): un BMP suelto o, con «offset», un DIB guardado dentro de un archivo de recursos. La lee de la
+    copia del disco (<root>/cd/<ID>) o de la imagen anotada en el manifiesto. Así también funciona con
+    instalaciones anteriores a esta receta. Devuelve la ruta, o None si el juego no tiene imagen o el disco no está
+    disponible. Refleja Save-TrArtSource."""
+    pic = (game(gid).get('art') or {}).get('picture')
+    if not pic:
+        return None
+    dst = os.path.join(root, 'games', gid, 'art', 'picture.bmp')
+    if os.path.exists(dst):
+        return dst
+    local = local_path(os.path.join(root, 'cd', gid), pic['file'])
+    if os.path.isfile(local):
+        size = os.path.getsize(local)
+        with open(local, 'rb') as f:
+            def read(offset, length):
+                if offset < 0 or length < 0 or offset + length > size:
+                    raise ValueError('La imagen de %s está fuera del archivo.' % pic['file'])
+                f.seek(offset)
+                return f.read(length)
+            data = _art_bytes(pic, size, read)
+    else:
+        iso_path = (get_manifest(root)['games'].get(gid) or {}).get('isoPath')
+        if not iso_path or not os.path.isfile(iso_path):
+            return None
+        with Iso(iso_path) as iso:
+            e = iso.find(pic['file'])
+            if e is None:
+                return None
+            data = _art_bytes(pic, e.size, lambda offset, length: iso.read_range(e, offset, length))
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    with open(dst, 'wb') as f:
+        f.write(data)
+    return dst
+
+
+def _art_bytes(pic, size, read):
+    """Bytes del BMP de la receta: el archivo tal cual o el DIB en «offset» con la cabecera de archivo BMP agregada."""
+    if 'offset' not in pic:
+        if size > ART_SOURCE_MAX:
+            raise ValueError('La imagen %s es demasiado grande.' % pic['file'])
+        data = read(0, size)
+        if len(data) < 54 or data[:2] != b'BM':
+            raise ValueError('%s no es un BMP.' % pic['file'])
+        return data
+    off = int(pic['offset'])
+    h = read(off, 40)
+    hsize, w, ht, planes, bpp, comp, nbytes = struct.unpack_from('<IiiHHII', h, 0)
+    used = struct.unpack_from('<I', h, 32)[0]
+    ht = abs(ht)
+    if hsize != 40 or planes != 1 or bpp not in (4, 8, 24) or comp not in (0, 1, 2) or not 1 <= w <= 2048 or not 1 <= ht <= 2048:
+        raise ValueError('No hay una imagen en %s (%d).' % (pic['file'], off))
+    colors = (used or (1 << bpp)) if bpp <= 8 else 0
+    if comp == 0:
+        nbytes = ((w * bpp + 31) // 32) * 4 * ht
+    length = 40 + 4 * colors + nbytes
+    if length > ART_SOURCE_MAX:
+        raise ValueError('La imagen de %s es demasiado grande.' % pic['file'])
+    return b'BM' + struct.pack('<IHHI', 14 + length, 0, 0, 14 + 40 + 4 * colors) + read(off, length)
 
 
 def uninstall_game(gid, root, keep_saves=True):

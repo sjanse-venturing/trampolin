@@ -248,7 +248,7 @@ function Show-TrLauncher {
         if (Invoke-TrAddToSteamUI -Root $root -Owner $form) { $Config.steamShortcuts = $true; Save-TrConfig $Config }
     })
     $btnHelp.Add_Click({
-        $doc = @((Join-Path $root 'LEEME-RUNTIME.md'), (Join-Path (Get-TrAppRoot) 'LEEME-RUNTIME.md')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        $doc = Get-TrGuidePath -Root $root
         if ($doc) { Start-Process notepad.exe -ArgumentList ('"{0}"' -f $doc) }
     })
     $btnLog.Add_Click({

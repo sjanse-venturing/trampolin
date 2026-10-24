@@ -84,7 +84,8 @@
         }
       },
       "kaIni": {},
-      "saves": [ "PLYR*.INI", "volumes.sav", "ka.atr" ]
+      "saves": [ "PLYR*.INI", "volumes.sav", "ka.atr" ],
+      "art": { "picture": { "file": "KG\\32BIT\\TL001.RSC", "offset": 697692 } }
     },
     {
       "id": "FG",
@@ -105,7 +106,8 @@
         }
       },
       "kaIni": {},
-      "saves": [ "PLYR*.INI", "volumes.sav", "ka.atr" ]
+      "saves": [ "PLYR*.INI", "volumes.sav", "ka.atr" ],
+      "art": { "picture": { "file": "FG\\32BIT\\DP001.RSC", "offset": 838414 } }
     },
     {
       "id": "2G",
@@ -126,7 +128,8 @@
         }
       },
       "kaIni": {},
-      "saves": [ "PLYR*.INI", "volumes.sav", "ka.atr" ]
+      "saves": [ "PLYR*.INI", "volumes.sav", "ka.atr" ],
+      "art": { "picture": { "file": "2G\\32BIT\\CC001.RSC", "offset": 1410289 } }
     },
     {
       "id": "3G",
@@ -147,7 +150,11 @@
         }
       },
       "kaIni": {},
-      "saves": [ "PLYR*.INI", "volumes.sav", "ka.atr" ]
+      "saves": [ "PLYR*.INI", "volumes.sav", "ka.atr" ],
+      "art": {
+        "picture": { "file": "SUPPORT\\AUTORUN\\SUPPORT\\3G.BMP" },
+        "logo": { "polygon": [ [33, 229], [37, 226], [286, 226], [286, 237], [358, 272], [287, 311], [287, 319], [37, 319], [33, 315] ], "key": "FF0000", "tolerance": 50 }
+      }
     },
     {
       "id": "4G",
@@ -169,7 +176,11 @@
       },
       "kaIni": {},
       "saves": [ "*.INI", "*.SAV" ],
-      "syncExclude": [ "4G.INI" ]
+      "syncExclude": [ "4G.INI" ],
+      "art": {
+        "picture": { "file": "SUPPORT\\AUTORUN\\SUPPORT\\4G.BMP" },
+        "logo": { "polygon": [ [36, 230], [40, 228], [280, 228], [280, 238], [351, 270], [281, 307], [281, 318], [40, 318], [36, 314] ], "key": "FF0000", "tolerance": 50 }
+      }
     }
   ]
 }

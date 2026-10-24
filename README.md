@@ -53,7 +53,7 @@ Para salir de un juego, usá la salida del propio juego (por ejemplo, la flecha 
 Si usás Steam en la PC, podés agregar la biblioteca y los juegos como juegos «no de Steam» y abrirlos desde **Big Picture** o desde **Steam Link** (en el celular, la tablet o la TV), con el control.
 
 1. Marcá **Agregar también a Steam** al instalar, o presioná **Agregar a Steam** en la biblioteca. Si Steam está abierto, Trampolín lo cierra un momento y lo vuelve a abrir.
-2. En Steam, los juegos aparecen en la biblioteca, dentro de *No de Steam*, con su ícono.
+2. En Steam, los juegos aparecen en la biblioteca, dentro de *No de Steam*, con su ícono y sus imágenes (portada, cabecera y fondo), que Trampolín arma a partir de cada disco.
 3. **Control:** los juegos se manejan con el mouse. En Steam elegí el juego → ⚙ → *Administrar* → *Configuración del control* y usá la plantilla **Teclado y mouse** (o **Gamepad con mouse**): el stick o el trackpad mueve el puntero y un gatillo o botón hace clic. En Steam Link con pantalla táctil también podés tocar donde quieras hacer clic.
 4. Si instalás o desinstalás juegos después, volvé a presionar **Agregar a Steam** para actualizar la lista.
 
@@ -90,7 +90,7 @@ Los juegos también quedan en el menú de aplicaciones del escritorio (*Juegos*)
 
 ### Jugar en el Modo Juego
 
-- Volvé al Modo Juego (ícono *Volver al Modo Juego* del escritorio). Los juegos están en *Biblioteca* → *No de Steam* (y en la colección **Trampolín**), cada uno con su ícono.
+- Volvé al Modo Juego (ícono *Volver al Modo Juego* del escritorio). Los juegos están en *Biblioteca* → *No de Steam* (y en la colección **Trampolín**), cada uno con su ícono y su portada.
 - **Controles:** el **trackpad derecho** mueve el puntero y se hace clic **presionando el trackpad**. También podés **tocar la pantalla** donde quieras hacer clic. Si un juego pide escribir (el nombre del jugador), apretá *Steam* + *X* para abrir el teclado.
 - Si los controles no responden como mouse: en Steam, juego → ⚙ → *Controlador* → elegí una plantilla de **teclado y mouse** (en esas plantillas el gatillo derecho también hace clic).
 - Para salir, usá la salida del propio juego (flecha roja o **SALIDA**) o el botón *Steam* → *Salir del juego*.

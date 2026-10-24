@@ -1,6 +1,7 @@
 @echo off
 rem Compila los componentes nativos (x86) de Trampolin Runtime con MSVC.
 rem Uso: build.cmd            (salida en runtime\native\bin)
+rem Las rutas van entre comillas: la carpeta del proyecto puede tener espacios.
 setlocal EnableDelayedExpansion
 set "HERE=%~dp0"
 set "OUT=%HERE%bin"
@@ -26,16 +27,16 @@ if /i not "%VSCMD_ARG_TGT_ARCH%"=="x86" (
 
 if not exist "%OUT%" mkdir "%OUT%"
 if not exist "%OBJ%" mkdir "%OBJ%"
-set "CFLAGS=/nologo /utf-8 /O2 /W3 /MT /GS- /D_CRT_SECURE_NO_WARNINGS /Fo%OBJ%\\"
+set "CFLAGS=/nologo /utf-8 /O2 /W3 /MT /GS- /D_CRT_SECURE_NO_WARNINGS"
 
 echo === WING32.DLL
-cl %CFLAGS% /LD "%HERE%wing32\wing32.c" /Fe"%OUT%\WING32.DLL" /link /DEF:"%HERE%wing32\wing32.def" gdi32.lib user32.lib kernel32.lib || exit /b 1
+cl %CFLAGS% /Fo"%OBJ%\\" /LD "%HERE%wing32\wing32.c" /Fe"%OUT%\WING32.DLL" /link /DEF:"%HERE%wing32\wing32.def" gdi32.lib user32.lib kernel32.lib || exit /b 1
 
 echo === trhook.dll
-cl %CFLAGS% /LD "%HERE%trhook\trhook.c" /Fe"%OUT%\trhook.dll" /link /DEF:"%HERE%trhook\trhook.def" gdi32.lib user32.lib kernel32.lib shell32.lib winmm.lib || exit /b 1
+cl %CFLAGS% /Fo"%OBJ%\\" /LD "%HERE%trhook\trhook.c" /Fe"%OUT%\trhook.dll" /link /DEF:"%HERE%trhook\trhook.def" gdi32.lib user32.lib kernel32.lib shell32.lib winmm.lib || exit /b 1
 
 echo === trlaunch.exe
-cl %CFLAGS% "%HERE%trlaunch\trlaunch.c" /Fe"%OUT%\trlaunch.exe" /link /SUBSYSTEM:WINDOWS user32.lib kernel32.lib || exit /b 1
+cl %CFLAGS% /Fo"%OBJ%\\" "%HERE%trlaunch\trlaunch.c" /Fe"%OUT%\trlaunch.exe" /link /SUBSYSTEM:WINDOWS user32.lib kernel32.lib || exit /b 1
 
 del /q "%OUT%\*.exp" "%OUT%\*.lib" 2>nul
 echo OK: binarios en %OUT%

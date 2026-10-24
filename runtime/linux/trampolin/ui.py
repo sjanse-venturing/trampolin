@@ -303,6 +303,8 @@ def add_to_steam(owner, theme, root):
         return False
 
     def work(progress, cancel):
+        progress(None, 'Preparando las imágenes para Steam…')
+        steam.prepare_art(root)
         if running:
             progress(None, 'Cerrando Steam…')
             if not steam.shutdown_steam():
@@ -503,10 +505,9 @@ class GoogleSetupDialog(Dialog):
         self.btn_scope.configure(text='Copiado ✓')
 
     def guide(self):
-        for p in (os.path.join(core.APP_ROOT, 'LEEME-RUNTIME.md'), os.path.join(os.path.dirname(core.APP_ROOT), 'LEEME-RUNTIME.md')):
-            if os.path.exists(p):
-                open_path(p)
-                return
+        p = core.guide_path()
+        if p:
+            open_path(p)
 
     def save(self):
         why = sync.save_google_client(self.cid.get(), self.secret.get())
@@ -1341,10 +1342,9 @@ class Library:
         d.run()
 
     def help(self):
-        for p in (os.path.join(self.root, 'LEEME-RUNTIME.md'), os.path.join(core.APP_ROOT, 'LEEME-RUNTIME.md')):
-            if os.path.exists(p):
-                open_path(p)
-                return
+        p = core.guide_path(self.root)
+        if p:
+            open_path(p)
 
     def show_log(self):
         if errors.log_file() and os.path.exists(errors.log_file()):

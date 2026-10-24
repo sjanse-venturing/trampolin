@@ -1,5 +1,5 @@
 # steam.py — accesos «no de Steam» (shortcuts.vdf) para ver los juegos en el Modo Juego del Steam Deck,
-# y entradas .desktop para el Modo Escritorio.
+# con su artwork (portada, cabecera, fondo y logo), y entradas .desktop para el Modo Escritorio.
 
 import os
 import shlex
@@ -9,7 +9,7 @@ import subprocess
 import time
 import zlib
 
-from . import core, icons, proton
+from . import art, core, icons, proton
 from .errors import log
 
 TAG = 'Trampolín'
@@ -180,6 +180,42 @@ def start_steam():
                      start_new_session=True)
 
 
+def prepare_art(root):
+    """Genera el artwork de los juegos instalados antes de cerrar Steam (tarda unos segundos por juego)."""
+    for ig in core.installed_games(root):
+        try:
+            art.make_art(ig.id, root)
+        except Exception as e:
+            log('Warn', 'No se pudo generar el artwork de %s: %s' % (ig.id, e))
+
+
+def install_art(root, wanted):
+    """Copia el artwork de cada juego a userdata/<id>/config/grid con los nombres que espera Steam.
+    No requiere cerrar Steam."""
+    by_name = {'Trampolín - ' + ig.name: ig.id for ig in core.installed_games(root)}
+    for w in wanted:
+        gid = by_name.get(w['AppName'])
+        if not gid:
+            continue
+        try:
+            src = art.make_art(gid, root)
+        except Exception as e:
+            log('Warn', 'No se pudo generar el artwork de %s: %s' % (gid, e))
+            continue
+        if not src:
+            continue
+        appid = w['appid'] & 0xFFFFFFFF
+        for d in user_config_dirs():
+            grid = os.path.join(d, 'grid')
+            os.makedirs(grid, exist_ok=True)
+            for name, pattern in art.GRID_NAMES.items():
+                target = os.path.join(grid, pattern % appid)
+                if os.path.exists(os.path.join(src, name)):
+                    shutil.copyfile(os.path.join(src, name), target)
+                elif os.path.exists(target):
+                    os.remove(target)
+
+
 def add_to_steam(root):
     """Escribe los accesos en todos los usuarios de Steam. Steam tiene que estar cerrado. Devuelve los archivos."""
     wanted = wanted_shortcuts(root)
@@ -189,6 +225,10 @@ def add_to_steam(root):
         update_shortcuts_file(path, [dict(w) for w in wanted])
         written.append(path)
         log('Info', 'Accesos de Steam actualizados en %s (%d)' % (path, len(wanted)))
+    try:
+        install_art(root, wanted)
+    except Exception as e:
+        log('Warn', 'No se pudo copiar el artwork de Steam: %s' % e)
     return written
 
 

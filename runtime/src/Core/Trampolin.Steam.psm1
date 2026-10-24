@@ -1,6 +1,7 @@
 ﻿# Trampolin.Steam.psm1 — accesos «no de Steam» (shortcuts.vdf) para abrir los juegos desde Steam,
-# Big Picture y Steam Link. Compatible con Windows PowerShell 5.1. Refleja linux/trampolin/steam.py
-# (mismo formato binario, mismo appid y mismos campos).
+# Big Picture y Steam Link, con su artwork (portada, cabecera, fondo y logo). Compatible con Windows
+# PowerShell 5.1. Refleja linux/trampolin/steam.py y linux/trampolin/art.py (mismo formato binario,
+# mismo appid, mismos campos y misma composición del artwork).
 
 Set-StrictMode -Version 2.0
 
@@ -168,9 +169,10 @@ function Get-TrWantedSteamShortcuts {
     $items = @(@{ name = $script:LibraryName; opts = $base; icon = '' })
     foreach ($g in @(Get-TrInstalledGames -Root $Root)) {
         $icon = $(if (Test-Path -LiteralPath $g.Icon) { $g.Icon } else { '' })
-        $items += @{ name = "Trampolín - $($g.Name)"; opts = "$base --play $($g.Id)"; icon = $icon }
+        $items += @{ name = "Trampolín - $($g.Name)"; opts = "$base --play $($g.Id)"; icon = $icon; id = $g.Id }
     }
     foreach ($i in $items) {
+        $script:LastArtIds[(Get-TrShortcutAppId $exe $i.name)] = $(if ($i.Contains('id')) { $i.id } else { $null })
         [ordered]@{
             appid = (Get-TrShortcutAppId $exe $i.name); AppName = $i.name; Exe = $exe; StartDir = ('"{0}"' -f $Root); icon = $i.icon
             ShortcutPath = ''; LaunchOptions = $i.opts; IsHidden = 0; AllowDesktopConfig = 1; AllowOverlay = 1; OpenVR = 0; Devkit = 0
@@ -218,6 +220,181 @@ function Update-TrSteamShortcutsFile {
     @($Wanted).Count
 }
 
+# ---------------------------------------------------------------------------
+# Artwork (config\grid): portada vertical, cabecera, fondo y logo
+# ---------------------------------------------------------------------------
+
+$script:LastArtIds = @{}
+
+# Estilo común a todos los juegos: el ícono del juego ampliado como pixel art dentro de un marco blanco
+# (escala entera k: marco de 34k con el ícono de 32k adentro), sobre el color principal del ícono, y una franja
+# con la imagen del disco (recortada para cubrirla) si la receta "art" la tiene. Sin imagen, el marco va
+# centrado. Mismas medidas y posiciones que LAYOUTS en linux/trampolin/art.py.
+$script:ArtLayouts = [ordered]@{
+    'portrait.png' = @{ w = 600; h = 900; k = 12; frame = @(96, 56); alone = @(96, 246); picture = @(0, 520, 600, 380) }
+    'header.png' = @{ w = 920; h = 430; k = 10; frame = @(45, 45); alone = @(290, 45); picture = @(430, 0, 490, 430) }
+    'hero.png' = @{ w = 1920; h = 620; k = 10; frame = @(236, 70); alone = @(790, 70); picture = @(880, 0, 1040, 620) }
+}
+# En el fondo el marco va arriba: Steam muestra abajo a la izquierda el logo (o el nombre, si no hay logo).
+$script:ArtGridNames = [ordered]@{ 'portrait.png' = '{0}p.png'; 'header.png' = '{0}.png'; 'hero.png' = '{0}_hero.png'; 'logo.png' = '{0}_logo.png' }
+
+function Get-TrDominantColor {
+    <# Color más frecuente entre los píxeles opacos (empate: el que aparece primero, de arriba abajo). #>
+    param([Parameter(Mandatory)]$Bitmap)
+    $count = @{}; $first = @{}; $i = 0
+    for ($y = 0; $y -lt $Bitmap.Height; $y++) {
+        for ($x = 0; $x -lt $Bitmap.Width; $x++) {
+            $c = $Bitmap.GetPixel($x, $y)
+            if ($c.A -ge 128) {
+                $k = ([int]$c.R -shl 16) -bor ([int]$c.G -shl 8) -bor [int]$c.B
+                if ($count.ContainsKey($k)) { $count[$k]++ } else { $count[$k] = 1; $first[$k] = $i }
+            }
+            $i++
+        }
+    }
+    if (-not $count.Count) { return [Drawing.Color]::FromArgb(128, 128, 128) }
+    $best = @($count.Keys | Sort-Object @{ e = { $count[$_] }; Descending = $true }, @{ e = { $first[$_] } })[0]
+    [Drawing.Color]::FromArgb(($best -shr 16) -band 255, ($best -shr 8) -band 255, $best -band 255)
+}
+
+function Get-TrPolygonCrossings {
+    <# Abscisas donde la recta horizontal Y corta los lados de un polígono [[x, y], ...]. #>
+    param([double]$Y, $Polygon)
+    $n = @($Polygon).Count; $j = $n - 1
+    for ($i = 0; $i -lt $n; $i++) {
+        $xi = [double]$Polygon[$i][0]; $yi = [double]$Polygon[$i][1]; $xj = [double]$Polygon[$j][0]; $yj = [double]$Polygon[$j][1]
+        if (($yi -gt $Y) -ne ($yj -gt $Y)) { ($xj - $xi) * ($Y - $yi) / ($yj - $yi) + $xi }
+        $j = $i
+    }
+}
+
+function New-TrArtImages {
+    <#
+      Genera las imágenes de Steam de un juego instalado en <Root>\games\<ID>\art\steam: el ícono del ejecutable y,
+      si la receta "art" la tiene, la imagen del disco (Save-TrArtSource) y el logo recortado de ella. Devuelve la
+      carpeta, o $null si falta el ejecutable. Se regeneran solo si cambió alguna de las fuentes.
+    #>
+    param([Parameter(Mandatory)][string]$Id, [Parameter(Mandatory)][string]$Root)
+    $game = Get-TrGame $Id
+    $hd = Join-Path $Root "games\$Id"
+    $exe = Join-Path $hd $game.icon
+    if (-not (Test-Path -LiteralPath $exe)) { return $null }
+    $src = $null
+    try { $src = Save-TrArtSource -Id $Id -Root $Root } catch { Write-TrLog Warn "No se pudo leer la imagen del disco de ${Id}: $_" }
+    $art = $(if ($game.PSObject.Properties.Name -contains 'art') { $game.art } else { $null })
+    $out = Join-Path $hd 'art\steam'
+    $hero = Join-Path $out 'hero.png'
+    if (Test-Path -LiteralPath $hero) {
+        $t = (Get-Item -LiteralPath $hero).LastWriteTime
+        $newer = @(@($exe, $src) | Where-Object { $_ -and (Get-Item -LiteralPath $_).LastWriteTime -gt $t })
+        if (-not $newer.Count) { return $out }
+    }
+    Add-Type -AssemblyName System.Drawing
+    New-Item -ItemType Directory -Force -Path $out | Out-Null
+    $icon = ([Drawing.Icon]::ExtractAssociatedIcon($exe)).ToBitmap()
+    $pic = $(if ($src) { New-Object Drawing.Bitmap $src } else { $null })
+    $wrap = New-Object Drawing.Imaging.ImageAttributes
+    $wrap.SetWrapMode([Drawing.Drawing2D.WrapMode]::TileFlipXY)   # sin bordes semitransparentes al escalar
+    try {
+        $bg = Get-TrDominantColor $icon
+        foreach ($name in $script:ArtLayouts.Keys) {
+            $l = $script:ArtLayouts[$name]
+            $canvas = New-Object Drawing.Bitmap $l.w, $l.h, ([Drawing.Imaging.PixelFormat]::Format32bppArgb)
+            $g = [Drawing.Graphics]::FromImage($canvas)
+            try {
+                $g.Clear($bg)
+                $at = $l.alone
+                if ($pic) {
+                    # Recorte centrado de la imagen con la proporción de la franja, escalado para cubrirla.
+                    $r = $l.picture; $s = [Math]::Max($r[2] / $pic.Width, $r[3] / $pic.Height)
+                    $sw = [int][Math]::Round($r[2] / $s); $sh = [int][Math]::Round($r[3] / $s)
+                    $sx = [int][Math]::Floor(($pic.Width - $sw) / 2); $sy = [int][Math]::Floor(($pic.Height - $sh) / 2)
+                    $g.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                    $g.PixelOffsetMode = [Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+                    $g.DrawImage($pic, (New-Object Drawing.Rectangle $r[0], $r[1], $r[2], $r[3]), $sx, $sy, $sw, $sh, [Drawing.GraphicsUnit]::Pixel, $wrap)
+                    $at = $l.frame
+                }
+                $k = $l.k
+                $g.FillRectangle([Drawing.Brushes]::White, $at[0], $at[1], 34 * $k, 34 * $k)
+                $g.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+                $g.PixelOffsetMode = [Drawing.Drawing2D.PixelOffsetMode]::Half
+                $g.DrawImage($icon, (New-Object Drawing.Rectangle ($at[0] + $k), ($at[1] + $k), (32 * $k), (32 * $k)))
+                $canvas.Save((Join-Path $out $name), [Drawing.Imaging.ImageFormat]::Png)
+            } finally { $g.Dispose(); $canvas.Dispose() }
+        }
+        $logoPath = Join-Path $out 'logo.png'
+        Remove-Item -LiteralPath $logoPath -Force -ErrorAction SilentlyContinue
+        if ($pic -and $art -and ($art.PSObject.Properties.Name -contains 'logo')) {
+            # Logo: lo que queda dentro del polígono, sin el color de fondo de la caja (con tolerancia).
+            $poly = @($art.logo.polygon)
+            $xs = @($poly | ForEach-Object { [int]$_[0] }); $ys = @($poly | ForEach-Object { [int]$_[1] })
+            $x0 = ($xs | Measure-Object -Minimum).Minimum; $y0 = ($ys | Measure-Object -Minimum).Minimum
+            $lw = ($xs | Measure-Object -Maximum).Maximum - $x0; $lh = ($ys | Measure-Object -Maximum).Maximum - $y0
+            $key = $art.logo.key; $kr = [Convert]::ToInt32($key.Substring(0, 2), 16); $kg = [Convert]::ToInt32($key.Substring(2, 2), 16); $kb = [Convert]::ToInt32($key.Substring(4, 2), 16)
+            $tol = [int]$art.logo.tolerance
+            $logo = New-Object Drawing.Bitmap $lw, $lh, ([Drawing.Imaging.PixelFormat]::Format32bppArgb)
+            for ($y = 0; $y -lt $lh; $y++) {
+                $cross = @(Get-TrPolygonCrossings ($y0 + $y + 0.5) $poly)
+                for ($x = 0; $x -lt $lw; $x++) {
+                    # Regla par-impar con el centro del píxel.
+                    $cx = $x0 + $x + 0.5; $in = $false
+                    foreach ($cr in $cross) { if ($cx -lt $cr) { $in = -not $in } }
+                    if (-not $in) { continue }
+                    $c = $pic.GetPixel($x0 + $x, $y0 + $y)
+                    $d = [Math]::Abs([int]$c.R - $kr) + [Math]::Abs([int]$c.G - $kg) + [Math]::Abs([int]$c.B - $kb)
+                    if ($d -gt $tol) { $logo.SetPixel($x, $y, $c) }
+                }
+            }
+            $canvas = New-Object Drawing.Bitmap 900, 230, ([Drawing.Imaging.PixelFormat]::Format32bppArgb)
+            $g = [Drawing.Graphics]::FromImage($canvas)
+            try {
+                $g.Clear([Drawing.Color]::Transparent)
+                $g.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                $g.PixelOffsetMode = [Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+                $s = [Math]::Min(900 / $lw, 230 / $lh); $w = [int][Math]::Floor($lw * $s); $h = [int][Math]::Floor($lh * $s)
+                $g.DrawImage($logo, (New-Object Drawing.Rectangle ([int][Math]::Round((900 - $w) / 2)), ([int][Math]::Round((230 - $h) / 2)), $w, $h), 0, 0, $lw, $lh, [Drawing.GraphicsUnit]::Pixel, $wrap)
+                $canvas.Save($logoPath, [Drawing.Imaging.ImageFormat]::Png)
+            } finally { $g.Dispose(); $canvas.Dispose(); $logo.Dispose() }
+        }
+    } finally {
+        $icon.Dispose(); $wrap.Dispose()
+        if ($pic) { $pic.Dispose() }
+    }
+    Write-TrLog Info "Artwork de Steam generado en $out"
+    $out
+}
+
+function Update-TrArtImages {
+    <# Genera el artwork de los juegos instalados antes de cerrar Steam. #>
+    param([Parameter(Mandatory)][string]$Root)
+    foreach ($g in @(Get-TrInstalledGames -Root $Root)) {
+        try { [void](New-TrArtImages -Id $g.Id -Root $Root) } catch { Write-TrLog Warn "No se pudo generar el artwork de $($g.Id): $_" }
+    }
+}
+
+function Install-TrSteamArt {
+    <# Copia el artwork de cada juego a userdata\<id>\config\grid con los nombres que espera Steam. No requiere cerrar Steam. #>
+    param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)]$Wanted)
+    foreach ($w in @($Wanted)) {
+        $id = $script:LastArtIds[$w.appid]
+        if (-not $id) { continue }
+        $dir = $null
+        try { $dir = New-TrArtImages -Id $id -Root $Root } catch { Write-TrLog Warn "No se pudo generar el artwork de ${id}: $_" }
+        if (-not $dir) { continue }
+        $appid = [uint32]([int64]$w.appid -band 0xFFFFFFFFL)
+        foreach ($cfg in @(Get-TrSteamUserConfigDirs)) {
+            $grid = Join-Path $cfg 'grid'
+            New-Item -ItemType Directory -Force -Path $grid | Out-Null
+            foreach ($name in $script:ArtGridNames.Keys) {
+                $file = Join-Path $dir $name
+                $target = Join-Path $grid ($script:ArtGridNames[$name] -f $appid)
+                if (Test-Path -LiteralPath $file) { Copy-Item -LiteralPath $file -Destination $target -Force }
+                else { Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue }
+            }
+        }
+    }
+}
+
 function Add-TrToSteam {
     <# Escribe los accesos en todos los usuarios de Steam. Steam tiene que estar cerrado. Devuelve los archivos. #>
     param([Parameter(Mandatory)][string]$Root)
@@ -236,6 +413,7 @@ function Add-TrToSteam {
         Write-TrLog Info "Accesos de Steam actualizados en $path ($($wanted.Count))"
         $written += $path
     }
+    try { Install-TrSteamArt -Root $Root -Wanted $wanted } catch { Write-TrLog Warn "No se pudo copiar el artwork de Steam: $_" }
     $written
 }
 
@@ -260,8 +438,9 @@ function Update-TrSteamShortcuts {
         try { [void](Update-TrSteamShortcutsFile -Path $p -Wanted $wanted); Write-TrLog Info "Accesos de Steam actualizados en $p" }
         catch { Write-TrLog Warn "No se pudieron actualizar los accesos de Steam en ${p}: $_"; return $false }
     }
+    try { Install-TrSteamArt -Root $Root -Wanted $wanted } catch { Write-TrLog Warn "No se pudo copiar el artwork de Steam: $_" }
     $true
 }
 
 Export-ModuleMember -Function Update-TrSteamShortcuts, ConvertFrom-TrVdf, ConvertTo-TrVdf, Get-TrShortcutAppId, Get-TrSteamRoot, Get-TrSteamUserConfigDirs, Test-TrSteamInstalled,
-    Test-TrSteamRunning, Stop-TrSteam, Start-TrSteam, Get-TrWantedSteamShortcuts, Update-TrSteamShortcutsFile, Add-TrToSteam
+    Test-TrSteamRunning, Stop-TrSteam, Start-TrSteam, Get-TrWantedSteamShortcuts, Update-TrSteamShortcutsFile, Add-TrToSteam, New-TrArtImages, Update-TrArtImages, Install-TrSteamArt

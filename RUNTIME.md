@@ -3,11 +3,13 @@
 > **Objetivo:** que los 8 juegos originales de la serie *Trampolín* (Anaya / Knowledge Adventure, 1995-1998) se instalen y ejecuten en Windows 10/11 de 64 bits **de forma nativa**, mediante un instalador con interfaz gráfica, sin VM, sin emulador de CPU y sin tocar el sistema más allá de lo imprescindible.
 >
 > **Producto final:** *Trampolín Runtime* =
-> `Trampolin.cmd` (doble clic) → asistente gráfico de instalación + lanzador de juegos con UI, manejo de errores amigable, log técnico, y el documento de usuario `LEEME-RUNTIME.md`.
+> `Trampolin.cmd` (doble clic) → asistente gráfico de instalación + lanzador de juegos con UI, manejo de errores amigable, log técnico, y el documento de usuario `README.md` (en el paquete y en la instalación, `LEEME.txt`).
 >
 > **Desde 2026-10-15 también en Linux / Steam Deck:** el mismo paquete trae `trampolin.sh`, un lanzador en Python + Tk que ejecuta los juegos con **Proton** usando las mismas piezas nativas (`trlaunch.exe`, `trhook.dll`, `WING32.DLL`). Las partidas se pueden **exportar e importar** entre Windows y el Steam Deck. Ver [§0.4](#04-linux--steam-deck-validado-el-2026-10-15) y [§15](#15-linux--steam-deck).
 >
 > **Desde la 1.1.0:** **sincronización automática de partidas** entre equipos (carpeta sincronizada o Google Drive, con validación de todo lo descargado), ver [§16](#16-sincronización-de-partidas-entre-equipos). En Windows, los juegos también se agregan a **Steam** para Big Picture y Steam Link, ver [§17](#17-steam-en-windows-big-picture-y-steam-link).
+>
+> **Desde la 1.2.0:** los accesos de Steam (Windows y Steam Deck) tienen **artwork** (portada, cabecera, fondo y, en 5° y 6° Curso, logo) generado en la instalación a partir del ícono y las imágenes de cada disco, ver [§17.1](#171-artwork-120).
 
 ---
 
@@ -26,7 +28,7 @@
 | `trhook.dll` | `runtime/native/trhook/` | Capa de compatibilidad por IAT (ver 0.2) |
 | `trlaunch.exe` | `runtime/native/trlaunch/` | Crea el juego suspendido, inyecta `trhook.dll` y espera |
 | Pruebas / empaquetado | `runtime/tests/Run-Tests.ps1`, `runtime/build.ps1` | 14 pruebas (incluye integración con las ISOs) y `dist\TrampolinRuntime-<v>.zip` |
-| Documento de usuario | `runtime/LEEME-RUNTIME.md` | Instalación, uso, problemas frecuentes |
+| Documento de usuario | `README.md` (raíz del repositorio; `LEEME.txt` en el paquete y en la instalación) | Instalación, uso, problemas frecuentes |
 
 ### 0.2 Causas reales encontradas y su corrección (todas en el Nivel 3)
 
@@ -52,7 +54,7 @@
 
 ### 0.3 Cómo usarlo
 
-- **Usuario final:** descomprimir `runtime\dist\TrampolinRuntime-<versión>.zip` y hacer doble clic en `Trampolin.cmd` (Windows) o ejecutar `trampolin.sh` (Linux / Steam Deck) (ver `runtime\LEEME-RUNTIME.md`).
+- **Usuario final:** descomprimir `runtime\dist\TrampolinRuntime-<versión>.zip` y hacer doble clic en `Trampolin.cmd` (Windows) o ejecutar `trampolin.sh` (Linux / Steam Deck) (ver `README.md`, que el paquete trae como `LEEME.txt`).
 - **Desarrollo:** `runtime\native\build.cmd` (requiere Build Tools de VS con C++ x86) y `powershell -File runtime\build.ps1 -IsoFolder <carpeta de ISOs>` (compila, prueba y empaqueta). La versión sale de `runtime\VERSION`.
 - **Fallos del juego:** si el juego se cae (por ejemplo `0xC0000005`, TR-RUN-004), `trhook` registra siempre en `logs\juego-<ID>.log` las líneas `FALLO`: módulo + desplazamiento, dirección accedida, registros y cadena de llamadas aproximada. El lanzador las copia a *Ver detalles / Copiar informe*. `TRAMPOLIN_VIEW=1152x864` fija el tamaño de la vista escalada, para reproducir otras resoluciones.
 - **Diagnóstico:** definir `TRAMPOLIN_TRACE=1` registra en `logs\juego-<ID>.log` cada INI, archivo, ventana y llamada de audio. `TRAMPOLIN_WING_LOG=<archivo>` registra las llamadas de WinG.
@@ -209,10 +211,10 @@ El modo B pasa el chequeo de CD sin trucos, porque Windows expone la ISO montada
 
 ```
 Trampolin/                         ← este proyecto
+├─ README.md                       ← documento para el usuario final (en el paquete, LEEME.txt)
 ├─ RUNTIME.md                      ← este documento
 ├─ runtime/
 │  ├─ Trampolin.cmd                ← punto de entrada (doble clic)
-│  ├─ LEEME-RUNTIME.md             ← documento para el usuario final
 │  ├─ src/
 │  │  ├─ Trampolin.ps1             ← arranque: carga módulos, decide asistente vs. lanzador
 │  │  ├─ Core/
@@ -255,7 +257,7 @@ Por defecto `%LOCALAPPDATA%\Trampolin` (no requiere permisos de administrador). 
 ├─ manifest.json                   ← qué se instaló, de dónde, con qué opciones (permite reparar/desinstalar)
 ├─ settings.json                   ← preferencias del usuario
 ├─ logs\trampolin-YYYYMMDD.log     ← log técnico
-└─ LEEME-RUNTIME.md
+└─ LEEME.txt                       ← documento para el usuario final (README.md del repositorio)
 ```
 
 Accesos directos en el Escritorio y en el Menú Inicio (`Programas\Trampolín\<Nombre del juego>.lnk`). Todos apuntan a `Trampolin.exe --play <ID>`, nunca al exe original, para que el lanzador aplique montaje, capas y hooks.
@@ -577,7 +579,7 @@ Ventana de 720×520, no redimensionable, botones **Atrás / Siguiente / Cancelar
 
 - **Vista principal:** grilla de tarjetas (FlowLayoutPanel) con el ícono extraído del exe (`[System.Drawing.Icon]::ExtractAssociatedIcon`), el nombre y la edad, y el botón grande **▶ Jugar**.
 - **Menú contextual por juego:** Opciones (ventana/pantalla completa, escala, capa gráfica Nivel 1/2/3, modo de datos), **Reparar** (revalida archivos contra el manifest y reescribe INIs y registro), **Abrir carpeta de partidas**, **Hacer copia de seguridad de partidas** (zip de `PLYR*.INI`, `volumes.sav`, `ka.atr`), **Desinstalar**.
-- **Barra inferior:** "Agregar juegos…" (vuelve al asistente), "Ayuda" (abre `LEEME-RUNTIME.md` renderizado en un `WebBrowser` o en el navegador), "Abrir log", "Acerca de".
+- **Barra inferior:** "Agregar juegos…" (vuelve al asistente), "Ayuda" (abre `README.md` renderizado en un `WebBrowser` o en el navegador), "Abrir log", "Acerca de".
 - **Al presionar Jugar:**
   1. Chequeo rápido (existe el exe, existe la ISO si el modo es B).
   2. Montaje de la ISO si corresponde, con barra "Preparando el disco…".
@@ -638,6 +640,7 @@ Variables: `{HD}`, `{CD}` (raíz de datos del CD: `E:` o `<inst>\cd\FG`), `{CDRO
 | `Get-TrSaveFiles`, `Export-TrAllSaves`, `Read-TrSavesZip`, `Import-TrSaves` | Partidas: exportar todas en un zip, importar desde un zip de Windows o de Linux (ver §15.6). Las mismas funciones existen en `linux/trampolin/core.py` |
 | `Sync-TrBeforePlay`, `Sync-TrAfterPlay`, `Sync-TrAll`, `Test-TrSyncBundle`, `Get-TrSyncStatus` (`Trampolin.Sync.psm1`) | Sincronización de partidas (§16). Pares en `linux/trampolin/sync.py`: `before_play`, `after_play`, `sync_all`, `validate_bundle`, `status` |
 | `Add-TrToSteam`, `Update-TrSteamShortcuts`, `ConvertFrom-TrVdf`/`ConvertTo-TrVdf` (`Trampolin.Steam.psm1`) | Accesos de Steam en Windows (§17). Pares en `linux/trampolin/steam.py` |
+| `New-TrArtImages`, `Install-TrSteamArt` (`Trampolin.Steam.psm1`), `Save-TrArtSource` | Artwork de Steam (§17.1). Pares en `linux/trampolin/art.py` y `core.save_art_source` |
 
 Todo lo de Core se puede testear con **Pester** sin UI (`tests\Core.Tests.ps1`), usando una ISO de prueba pequeña generada con `oscdimg`/`IMAPI2FS` y un `games.json` de prueba.
 
@@ -787,21 +790,21 @@ Para **cada** juego, empezando por FG (la familia KA-MFC cubre 4 de los 8 juegos
 | R4.7 | `UI\Dialogs.ps1`: diálogo de error amigable con detalles desplegables y botones de acción | 🤖 |
 | R4.8 | `Trampolin.cmd` + `build.ps1` (empaqueta `dist\TrampolinRuntime-<versión>.zip`; opcional `ps2exe` → `Trampolin.exe`) | 🤖 |
 | R4.9 | Revisión de usabilidad: hacer la instalación completa como lo haría un padre o madre sin conocimientos técnicos | 👤 |
-| R4.10 | Escribir `LEEME-RUNTIME.md` (§10.1) | 🤖 |
+| R4.10 | Escribir `README.md` (§10.1) | 🤖 |
 
 ### Fase R5 — Pulido (2-3 días)
 
 - R5.1 🤖 Conversión de los `.HLP` a HTML (helpdeco) → "Guía para padres" en el lanzador.
-- R5.2 🤖 Mejoras de MIDI opcionales: detectar si hay un sintetizador alternativo (por ejemplo, VirtualMIDISynth) y documentarlo en el LEEME.
+- R5.2 🤖 Mejoras de MIDI opcionales: detectar si hay un sintetizador alternativo (por ejemplo, VirtualMIDISynth) y documentarlo en el README.
 - R5.3 🤖 Desinstalación completa: borra `games\`, `cd\`, accesos directos, registro `Layers` y secciones de `KA.INI`, y **pregunta antes de borrar las partidas**.
 - R5.4 👤 Pruebas en una segunda máquina limpia con Windows 10 y otra con Windows 11.
 
 ### Fase R6 — Entrega
 
-- 🤖 `dist\TrampolinRuntime-1.0.0.zip` con `Trampolin.cmd`, `app\`, `tools\` y `LEEME-RUNTIME.md`. No incluye las ISOs.
+- 🤖 `dist\TrampolinRuntime-1.0.0.zip` con `Trampolin.cmd`, `app\`, `tools\` y `README.md`. No incluye las ISOs.
 - 👤 Prueba de aceptación final (§11.3).
 
-### 10.1 Contenido de `LEEME-RUNTIME.md` (documento para el usuario final)
+### 10.1 Contenido de `README.md` (documento para el usuario final)
 
 1. Qué es y qué necesitás (Windows 10/11 64 bits, las ISOs, unos 3 GB libres).
 2. Instalación en 5 pasos con capturas: descomprimir el ZIP → doble clic en `Trampolin.cmd` → elegir la carpeta de las ISOs → elegir juegos y carpeta → Instalar.
@@ -846,7 +849,7 @@ Instalación limpia; instalación con ruta personalizada con espacios; ruta con 
 | Prueba | Qué verificar |
 |---|---|
 | D1 Modo Escritorio | `trampolin.sh` abre el asistente; instala los 8 juegos; la biblioteca los lanza |
-| D2 Steam | «Agregar a Steam» cierra y reabre Steam; aparecen «Biblioteca Trampolín» y los 8 juegos en la colección «Trampolín» |
+| D2 Steam | «Agregar a Steam» cierra y reabre Steam; aparecen «Biblioteca Trampolín» y los 8 juegos en la colección «Trampolín», con su portada, cabecera y fondo (§17.1) |
 | D3 Modo Juego | Cada juego arranca desde Steam a pantalla completa; al salir del juego se vuelve a Steam |
 | D4 Controles | Trackpad derecho = mouse (clic al presionarlo); pantalla táctil = clic en el punto tocado; teclado en pantalla (Steam + X) para el nombre del jugador |
 | D5 Partidas | Exportar en Windows → importar en el Deck → el jugador aparece con su progreso; y al revés |
@@ -856,7 +859,7 @@ Instalación limpia; instalación con ruta personalizada con espacios; ruta con 
 
 ### 11.4 Aceptación final
 
-- Un usuario sin conocimientos técnicos instala los 8 juegos solo con `LEEME-RUNTIME.md` en menos de 15 minutos.
+- Un usuario sin conocimientos técnicos instala los 8 juegos solo con `README.md` en menos de 15 minutos.
 - Los 8 juegos pasan T1-T11 y T13-T15.
 - No queda ningún cambio en el sistema fuera de `%LOCALAPPDATA%\Trampolin`, `VirtualStore\Windows\KA.INI`, `HKCU\…\Layers` y los accesos directos (verificado con un snapshot de registro y archivos antes/después).
 
@@ -1011,6 +1014,7 @@ runtime/
 - «Agregar a Steam» escribe accesos no-Steam para la biblioteca y cada juego (`Exe` = `<instalación>/app/trampolin.sh`, `LaunchOptions` = `--play <ID>`, sin herramienta de compatibilidad: el script maneja Proton). Todos quedan en la colección «Trampolín», con el ícono del juego.
 - El `appid` se calcula como Steam: `crc32(exe + nombre) | 0x80000000`. Los accesos propios se reconocen por el `Exe` (`…/trampolin.sh`) y se reemplazan sin duplicar; los demás accesos del usuario se conservan (se guarda `shortcuts.vdf.trampolin.bak` la primera vez).
 - Steam reescribe `shortcuts.vdf` al cerrarse, así que hay que escribirlo con Steam cerrado: el lanzador ofrece cerrarlo (`steam -shutdown`) y lo vuelve a abrir. Solo se puede hacer desde el Modo Escritorio.
+- Cada juego lleva su artwork (portada, cabecera, fondo y logo) en `userdata/<usuario>/config/grid`, generado con la biblioteca estándar de Python (`art.py`: lee BMP, también RLE8, y el ícono del `.exe`; escribe PNG). Ver §17.1.
 
 ### 15.5 Línea de comandos (también para pruebas)
 
@@ -1155,3 +1159,35 @@ Sin `clientId`, la opción Google Drive aparece deshabilitada («Falta habilitar
   - al instalar o desinstalar juegos, `Update-TrSteamShortcuts` actualiza los accesos solo donde ya estaban y solo con Steam cerrado (si no, avisa);
   - los accesos usan `--play`, así que la sincronización de §16 también funciona desde Steam Link.
 - **Falta validar a mano:** que Steam muestre los accesos e íconos, que Big Picture y Steam Link abran los juegos a pantalla completa, y la plantilla de control «Teclado y mouse».
+
+### 17.1 Artwork (1.2.0)
+
+> `New-TrArtImages`, `Install-TrSteamArt`, `Update-TrArtImages` (`Trampolin.Steam.psm1`), `Save-TrArtSource` (`Trampolin.Core.psm1`). Pares en Linux: `linux/trampolin/art.py` (`make_art`), `steam.install_art`/`prepare_art` y `core.save_art_source`, con las mismas medidas y la misma composición. No se distribuye ninguna imagen de los juegos: todo se genera en la instalación a partir del disco.
+
+Los CD traen muy poco material gráfico suelto: solo 5° y 6° Curso tienen la caja (`SUPPORT\AUTORUN\SUPPORT\3G.BMP`/`4G.BMP`); en el resto hay únicamente logos de la editorial. Los juegos KA-MFC guardan sus pantallas como DIB comunes (640×480, 8 bits, RLE8) dentro de los `.RSC` (`BWRF10`), y los contenedores de ACES y PEEWEE usan formatos propios. Por eso el artwork tiene un **estilo común** para los 8 juegos:
+
+- **Ícono del juego** (el del `.exe`, 32×32) ampliado como pixel art (vecino más cercano, escala entera) dentro de un marco blanco, sobre el **color más frecuente del ícono** (empate: el que aparece primero).
+- **Franja con una imagen del disco**, si la receta `art` de `games.json` la tiene, recortada al centro para cubrir su rectángulo. Sin imagen, el marco va centrado.
+- **Logo** solo donde el disco lo trae (5° y 6° Curso): la banda «Trampolín Educación Primaria / Quinto|Sexto Curso» de la caja, recortada con un polígono (`art.logo.polygon`, en coordenadas de la imagen) y sin el rojo del fondo (`key` `FF0000`, tolerancia 50). En los demás, Steam muestra el nombre del acceso.
+
+| Juego | Imagen del disco (`art.picture`) |
+|---|---|
+| Primeros Pasos, Infantil 1° Ciclo, Primera Infancia | — (solo el ícono) |
+| Infantil 2° Ciclo (`KG`) | escuela: DIB en `KG\32BIT\TL001.RSC` @ 697692 |
+| Primaria 1° Ciclo (`FG`) | cucha: DIB en `FG\32BIT\DP001.RSC` @ 838414 |
+| Primaria 2° Ciclo (`2G`) | manzano: DIB en `2G\32BIT\CC001.RSC` @ 1410289 |
+| 5° Curso (`3G`), 6° Curso (`4G`) | la caja, `SUPPORT\AUTORUN\SUPPORT\3G.BMP` / `4G.BMP` (+ logo) |
+
+`offset` es la posición de la `BITMAPINFOHEADER` dentro del archivo; se valida (tamaño 40, 1 plano, 4/8/24 bits, sin compresión o RLE, medidas ≤ 2048, ≤ 8 MB) y se le agrega la cabecera de archivo BMP. Los offsets valen para las imágenes reconocidas por su tamaño exacto.
+
+| Archivo en `userdata\<id>\config\grid` | Medida | Composición (marco = 34k con el ícono de 32k) |
+|---|---|---|
+| `<appid>p.png` (portada) | 600×900 | marco k=12 arriba, imagen en la franja inferior (600×380); sin imagen, marco centrado |
+| `<appid>.png` (cabecera) | 920×430 | marco k=10 a la izquierda, imagen a la derecha (490×430) |
+| `<appid>_hero.png` (fondo) | 1920×620 | marco k=10 arriba a la izquierda (abajo a la izquierda Steam pone el logo o el nombre), imagen a la derecha (1040×620) |
+| `<appid>_logo.png` | 900×230 | logo transparente (solo 5° y 6° Curso) |
+
+- **De dónde sale la imagen:** al instalar se guarda en `games\<ID>\art\picture.bmp`, leída de la copia del disco (`cd\<ID>`) o, en modo iso, directamente de la imagen (`TrIso.ReadRange`). Las instalaciones anteriores a la 1.2.0 la obtienen igual la primera vez que se agrega a Steam (de `cd\<ID>` o del `isoPath` del manifiesto); si la ISO ya no está, queda el estilo sin imagen.
+- **Cuándo:** «Agregar a Steam» genera las imágenes **antes** de cerrar Steam (en Python tarda unos segundos por juego) y las copia a `config\grid` de cada usuario junto con los accesos; también `Update-TrSteamShortcuts` al instalar o desinstalar. El artwork no requiere cerrar Steam. Se regenera solo si el `.exe` o la imagen son más nuevos que `hero.png`.
+- **Verificado:** las pruebas generan el artwork con imágenes sintéticas en Windows y en Linux (medidas, marco, color, logo transparente, copia a `grid` con el `appid` sin signo) y leen la imagen de cada uno de los 5 discos reales; las imágenes de los 8 juegos salen iguales a la vista en las dos plataformas.
+- **Falta validar a mano:** cómo se ven en la biblioteca de Steam y en el Modo Juego del Steam Deck.

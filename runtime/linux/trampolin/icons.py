@@ -65,9 +65,10 @@ def _png(width, height, rgba_rows):
             chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b''))
 
 
-def _dib_to_png(dib):
+def _dib_to_rgba(dib):
+    """Píxeles de un ícono DIB: (ancho, alto, filas RGBA de arriba abajo), o None si el formato no se soporta."""
     if dib[:8] == b'\x89PNG\r\n\x1a\n':
-        return dib
+        return None
     hsize, w, h2, planes, bpp, comp = struct.unpack_from('<IiiHHI', dib, 0)
     if comp not in (0, 3):
         return None
@@ -107,31 +108,40 @@ def _dib_to_png(dib):
                 a = 0 if masked and (r, g, b) == (0, 0, 0) else 255
             row += bytes((r, g, b, a))
         rows.append(row)
-    return _png(w, h, rows)
+    return w, h, rows
+
+
+def _dib_to_png(dib):
+    if dib[:8] == b'\x89PNG\r\n\x1a\n':
+        return dib
+    px = _dib_to_rgba(dib)
+    return _png(*px) if px else None
+
+
+def _best_icons(exe_path):
+    """El ícono más grande y con más colores de cada grupo del ejecutable, en el orden del directorio
+    (como Windows: los grupos con nombre primero)."""
+    with open(exe_path, 'rb') as f:
+        res = _pe_resources(f.read())
+    if not res:
+        return
+    for key in [k for k in res if k[0] == RT_GROUP_ICON]:
+        grp = res[key]
+        count = struct.unpack_from('<H', grp, 4)[0]
+        best = None
+        for i in range(count):
+            w, h, colors, _, planes, bpp, size, nid = struct.unpack_from('<BBBBHHIH', grp, 6 + 14 * i)
+            rank = ((w or 256), bpp or (8 if colors == 0 else 4))
+            if (RT_ICON, nid) in res and (best is None or rank > best[0]):
+                best = (rank, nid)
+        if best is not None:
+            yield res[(RT_ICON, best[1])]
 
 
 def exe_icon_png(exe_path, out_path):
     """Guarda en out_path (PNG) el ícono más grande y con más colores del ejecutable. Devuelve True si pudo."""
     try:
-        with open(exe_path, 'rb') as f:
-            res = _pe_resources(f.read())
-        if not res:
-            return False
-        groups = [k for k in res if k[0] == RT_GROUP_ICON]     # orden del directorio, como Windows (con nombre primero)
-        png = None
-        for key in groups:
-            grp = res[key]
-            count = struct.unpack_from('<H', grp, 4)[0]
-            best = None
-            for i in range(count):
-                w, h, colors, _, planes, bpp, size, nid = struct.unpack_from('<BBBBHHIH', grp, 6 + 14 * i)
-                rank = ((w or 256), bpp or (8 if colors == 0 else 4))
-                if (RT_ICON, nid) in res and (best is None or rank > best[0]):
-                    best = (rank, nid)
-            if best is not None:
-                png = _dib_to_png(res[(RT_ICON, best[1])])
-                if png:
-                    break
+        png = next((p for p in map(_dib_to_png, _best_icons(exe_path)) if p), None)
         if not png:
             return False
         with open(out_path, 'wb') as f:
@@ -139,3 +149,11 @@ def exe_icon_png(exe_path, out_path):
         return True
     except Exception:
         return False
+
+
+def exe_icon_rgba(exe_path):
+    """Píxeles del ícono del ejecutable (el mismo que exe_icon_png): (ancho, alto, filas RGBA) o None."""
+    try:
+        return next((p for p in map(_dib_to_rgba, _best_icons(exe_path)) if p), None)
+    except Exception:
+        return None

@@ -21,7 +21,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'linux'))
 
-from trampolin import core, errors, proton, steam, sync  # noqa: E402
+from trampolin import art, core, errors, proton, steam, sync  # noqa: E402
 from trampolin.errors import TrError  # noqa: E402
 from trampolin.iso import Iso  # noqa: E402
 
@@ -590,6 +590,130 @@ class SteamTests(unittest.TestCase):
         self.assertEqual(a & 0xFFFFFFFF, (a + (1 << 32)) & 0xFFFFFFFF)
 
 
+def png_size(path):
+    with open(path, 'rb') as f:
+        head = f.read(24)
+    assert head[:8] == b'\x89PNG\r\n\x1a\n'
+    return struct.unpack('>II', head[16:24])
+
+
+def png_pixel(path, x, y):
+    """Píxel RGBA de un PNG escrito por art.save_png (RGBA de 8 bits, sin entrelazar, filtro 0 en cada fila)."""
+    import zlib
+    data = read(path, 'rb')
+    w, h = struct.unpack('>II', data[16:24])
+    i, idat = 8, b''
+    while i < len(data):
+        n = struct.unpack('>I', data[i:i + 4])[0]
+        if data[i + 4:i + 8] == b'IDAT':
+            idat += data[i + 8:i + 8 + n]
+        i += 12 + n
+    raw = zlib.decompress(idat)
+    o = y * (w * 4 + 1) + 1 + x * 4
+    return tuple(raw[o:o + 4])
+
+
+def bmp24(w, h, pixel):
+    """BMP de 24 bits con píxeles pixel(x, y) -> (r, g, b)."""
+    stride = (w * 3 + 3) & ~3
+    rows = b''.join(b''.join(bytes(pixel(x, y)[::-1]) for x in range(w)) + b'\0' * (stride - w * 3) for y in range(h - 1, -1, -1))
+    return (b'BM' + struct.pack('<IHHI', 54 + len(rows), 0, 0, 54) +
+            struct.pack('<IiiHHIIiiII', 40, w, h, 1, 24, 0, len(rows), 2835, 2835, 0, 0) + rows)
+
+
+def fake_icon(exe_path):
+    """Ícono sintético de 32x32: mayoría verde azulado (0, 128, 128), con una franja marrón."""
+    rows = [bytearray(b''.join(bytes((128, 64, 0, 255)) if 10 <= x < 16 else bytes((0, 128, 128, 255)) for x in range(32)))
+            for _ in range(32)]
+    return 32, 32, rows
+
+
+class ArtTests(unittest.TestCase):
+    def setUp(self):
+        p = mock.patch.object(art.icons, 'exe_icon_rgba', fake_icon)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_icon_only(self):
+        with tempfile.TemporaryDirectory() as t:
+            fake_install(t, ['PRE_K'])
+            out = art.make_art('PRE_K', t)
+            sizes = {n: png_size(os.path.join(out, n)) for n in os.listdir(out)}
+            self.assertEqual(sizes, {'portrait.png': (600, 900), 'header.png': (920, 430), 'hero.png': (1920, 620)})
+            self.assertEqual(png_pixel(os.path.join(out, 'portrait.png'), 5, 5), (0, 128, 128, 255))      # color del ícono
+            self.assertEqual(png_pixel(os.path.join(out, 'portrait.png'), 96, 246), (255, 255, 255, 255))  # marco centrado
+            self.assertEqual(png_pixel(os.path.join(out, 'portrait.png'), 96 + 12 + 12 * 12, 300), (128, 64, 0, 255))
+            mtime = os.path.getmtime(os.path.join(out, 'hero.png'))
+            os.utime(os.path.join(out, 'hero.png'), (mtime + 10, mtime + 10))
+            art.make_art('PRE_K', t)                    # sin cambios en las fuentes: no regenera
+            self.assertEqual(os.path.getmtime(os.path.join(out, 'hero.png')), mtime + 10)
+
+    def test_picture_logo_and_grid(self):
+        # Caja sintética como la de 5° Curso: fondo rojo, «lápiz» azul dentro del polígono de la receta.
+        def px(x, y):
+            if y < 200:
+                return 0, 128, 0
+            return (0, 0, 255) if 50 <= x < 270 and 235 <= y < 305 else (255, 0, 0)
+        with tempfile.TemporaryDirectory() as t:
+            fake_install(t, ['3G'])
+            src = os.path.join(t, 'cd', '3G', 'SUPPORT', 'AUTORUN', 'SUPPORT', '3g.bmp')     # en minúsculas, como en el disco
+            os.makedirs(os.path.dirname(src))
+            with open(src, 'wb') as f:
+                f.write(bmp24(363, 360, px))
+            out = art.make_art('3G', t)
+            self.assertTrue(os.path.exists(os.path.join(t, 'games', '3G', 'art', 'picture.bmp')))
+            self.assertEqual(png_size(os.path.join(out, 'logo.png')), (900, 230))
+            self.assertEqual(png_pixel(os.path.join(out, 'logo.png'), 2, 2)[3], 0)            # sin el rojo de la caja
+            r, g, b, a = png_pixel(os.path.join(out, 'logo.png'), 300, 115)
+            self.assertTrue(a == 255 and b > 200 and r < 50)
+            self.assertGreater(png_pixel(os.path.join(out, 'portrait.png'), 300, 530)[1], 100)    # franja con la imagen
+            cfgdir = os.path.join(t, 'steam', 'userdata', '42', 'config')
+            os.makedirs(cfgdir)
+            with mock.patch.object(steam, 'user_config_dirs', lambda: [cfgdir]):
+                wanted = steam.wanted_shortcuts(t)
+                steam.install_art(t, wanted)
+            u = wanted[1]['appid'] & 0xFFFFFFFF
+            self.assertEqual(sorted(os.listdir(os.path.join(cfgdir, 'grid'))),
+                             sorted(['%dp.png' % u, '%d.png' % u, '%d_hero.png' % u, '%d_logo.png' % u]))
+
+    def test_dib_inside_resource_file(self):
+        pic = core.game('KG')['art']['picture']
+        w, h = 640, 480
+        dib = (struct.pack('<IiiHHIIiiII', 40, w, h, 1, 8, 0, 0, 0, 0, 0, 0) +
+               b''.join(bytes((i, i, i, 0)) for i in range(256)) + bytes([200]) * (w * h))
+        with tempfile.TemporaryDirectory() as t:
+            fake_install(t, ['KG'])
+            rsc = core.local_path(os.path.join(t, 'cd', 'KG'), pic['file'])
+            os.makedirs(os.path.dirname(rsc))
+            with open(rsc, 'wb') as f:
+                f.write(bytes(pic['offset']) + dib + bytes(100))
+            img = art.read_bmp(core.save_art_source('KG', t))
+            self.assertEqual((img.w, img.h, img.pixel(10, 10)), (640, 480, (200, 200, 200, 255)))
+        with tempfile.TemporaryDirectory() as t:
+            fake_install(t, ['KG'])
+            rsc = core.local_path(os.path.join(t, 'cd', 'KG'), pic['file'])
+            os.makedirs(os.path.dirname(rsc))
+            with open(rsc, 'wb') as f:
+                f.write(bytes(pic['offset'] + 2000))
+            with self.assertRaises(ValueError):
+                core.save_art_source('KG', t)
+            self.assertFalse(os.path.exists(os.path.join(t, 'games', 'KG', 'art', 'picture.bmp')))
+
+    def test_rle8(self):
+        # 4x2: fila de abajo «1 x índice 1, literal [1, 2, 3]» (los literales son de 3 o más), arriba «4 x índice 3».
+        pal = b''.join(bytes((i * 10, i * 20, i * 30, 0)) for i in range(4))     # B, G, R
+        body = bytes([1, 1, 0, 3, 1, 2, 3, 0, 0, 0, 4, 3, 0, 1])
+        data = (b'BM' + struct.pack('<IHHI', 54 + 16 + len(body), 0, 0, 54 + 16) +
+                struct.pack('<IiiHHIIiiII', 40, 4, 2, 1, 8, 1, len(body), 0, 0, 4, 0) + pal + body)
+        with tempfile.TemporaryDirectory() as t:
+            p = os.path.join(t, 'x.bmp')
+            with open(p, 'wb') as f:
+                f.write(data)
+            img = art.read_bmp(p)
+        self.assertEqual([img.pixel(x, 1)[0] for x in range(4)], [30, 30, 60, 90])
+        self.assertEqual([img.pixel(x, 0)[2] for x in range(4)], [30, 30, 30, 30])
+
+
 class ProtonTests(unittest.TestCase):
     def test_prefers_recommended(self):
         tools = [proton.ProtonTool(n, '/x/' + n) for n in ('Proton 11.0', 'Proton - Experimental', 'Proton 10.0', 'Proton 9.0 (Beta)')]
@@ -608,6 +732,21 @@ class IsoTests(unittest.TestCase):
             with Iso(i.path) as iso:
                 self.assertTrue(iso.find(core.game(i.game_id)['iso']['keyFile']))
                 self.assertTrue(iso.volume_label)
+
+    def test_art_sources(self):
+        # La imagen del artwork de cada juego se lee de su disco (sin copiar el disco).
+        isos, _ = core.find_isos(os.environ['TRAMPOLIN_ISOS'])
+        ok = [i for i in isos if i.status == 'ok' and core.game(i.game_id).get('art')]
+        expected = {'KG': (640, 480), 'FG': (640, 480), '2G': (640, 480), '3G': (363, 360), '4G': (357, 360)}
+        with tempfile.TemporaryDirectory() as t:
+            fake_install(t, [i.game_id for i in ok])
+            m = core.get_manifest(t)
+            for i in ok:
+                m['games'][i.game_id]['isoPath'] = i.path
+            core.save_manifest(t, m)
+            for i in ok:
+                img = art.read_bmp(core.save_art_source(i.game_id, t))
+                self.assertEqual((img.w, img.h), expected[i.game_id], i.game_id)
 
 
 if __name__ == '__main__':

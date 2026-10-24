@@ -473,7 +473,7 @@ function Install-TrRuntimeFiles {
     $binDst = Join-Path $app 'native\bin'
     New-Item -ItemType Directory -Force -Path $binDst | Out-Null
     Copy-Item -Path (Join-Path $binSrc '*') -Destination $binDst -Force
-    foreach ($f in @('Trampolin.cmd', 'LEEME-RUNTIME.md', 'VERSION')) {
+    foreach ($f in @('Trampolin.cmd', 'VERSION')) {
         $p = Join-Path $src $f
         if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination $app -Force }
     }
@@ -482,8 +482,20 @@ function Install-TrRuntimeFiles {
         'start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "%~dp0app\src\Trampolin.ps1" %*'
     )
     [IO.File]::WriteAllLines((Join-Path $Root 'Trampolin.cmd'), $cmd, [Text.Encoding]::ASCII)
-    if (Test-Path -LiteralPath (Join-Path $src 'LEEME-RUNTIME.md')) { Copy-Item -LiteralPath (Join-Path $src 'LEEME-RUNTIME.md') -Destination $Root -Force }
+    # Documento de usuario: LEEME.txt en un paquete, README.md de la raíz del repositorio en desarrollo.
+    $doc = @((Join-Path $src 'LEEME.txt'), (Join-Path (Split-Path -Parent $src) 'README.md')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if ($doc) { foreach ($d in $app, $Root) { Copy-Item -LiteralPath $doc -Destination (Join-Path $d 'LEEME.txt') -Force } }
+    foreach ($d in $app, $Root) { Remove-Item -LiteralPath (Join-Path $d 'LEEME-RUNTIME.md') -Force -ErrorAction SilentlyContinue }   # nombre anterior
     $app
+}
+
+function Get-TrGuidePath {
+    <# Documento de usuario: el de la instalación, el de esta copia (LEEME.txt) o el README.md del repositorio. #>
+    param([string]$Root)
+    $c = @()
+    if ($Root) { $c += Join-Path $Root 'LEEME.txt' }
+    $c += (Join-Path $script:AppRoot 'LEEME.txt'), (Join-Path (Split-Path -Parent $script:AppRoot) 'README.md')
+    $c | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 }
 
 function Get-TrRuntimeVersion {
@@ -616,6 +628,7 @@ function Install-TrGame {
             hd = $hd; cd = $(if ($DataMode -eq 'copy') { $cd } else { $null }); installedAt = (Get-Date -Format s)
         }
         Save-TrManifest -Root $Root -Manifest $manifest
+        try { [void](Save-TrArtSource -Id $Id -Root $Root) } catch { Write-TrLog Warn "No se pudo guardar la imagen del artwork de ${Id}: $_" }
         & $progress 100 "$($game.name): listo."
     }
 }
@@ -666,6 +679,76 @@ function Get-TrInstalledGames {
                 Icon = (Join-Path $e.hd $g.icon) }
         }
     }
+}
+
+function Save-TrArtSource {
+    <#
+      Guarda en <Root>\games\<ID>\art\picture.bmp la imagen del disco que usa el artwork de Steam (receta "art"
+      de games.json): un BMP suelto o, con "offset", un DIB guardado dentro de un archivo de recursos. La lee de
+      la copia del disco (<Root>\cd\<ID>) o, en modo iso, de la imagen anotada en el manifiesto. Así también
+      funciona con instalaciones anteriores a esta receta. Devuelve la ruta, o $null si el juego no tiene imagen
+      o el disco no está disponible.
+    #>
+    param([Parameter(Mandatory)][string]$Id, [Parameter(Mandatory)][string]$Root)
+    $game = Get-TrGame $Id
+    if (-not ($game.PSObject.Properties.Name -contains 'art')) { return $null }
+    $pic = $game.art.picture
+    $dst = Join-Path $Root "games\$Id\art\picture.bmp"
+    if (Test-Path -LiteralPath $dst) { return $dst }
+    $fs = $null; $iso = $null; $entry = $null
+    $local = Join-Path $Root "cd\$Id\$($pic.file)"
+    try {
+        if (Test-Path -LiteralPath $local) {
+            $fs = [IO.File]::OpenRead($local); $size = $fs.Length
+        } else {
+            $e = (Get-TrManifest -Root $Root).games[$Id]
+            if (-not $e -or -not $e.isoPath -or -not (Test-Path -LiteralPath $e.isoPath)) { return $null }
+            $iso = New-Object TrIso($e.isoPath)
+            $entry = $iso.Find($pic.file)
+            if (-not $entry) { return $null }
+            $size = $entry.Size
+        }
+        $read = {
+            param([long]$Offset, [int]$Length)
+            if ($Offset -lt 0 -or $Length -lt 0 -or $Offset + $Length -gt $size) { throw "La imagen de $($pic.file) está fuera del archivo." }
+            if ($iso) { return , $iso.ReadRange($entry, $Offset, $Length) }
+            $buf = New-Object byte[] $Length
+            [void]$fs.Seek($Offset, 'Begin')
+            $n = 0; while ($n -lt $Length) { $r = $fs.Read($buf, $n, $Length - $n); if ($r -le 0) { throw 'Archivo truncado.' }; $n += $r }
+            , $buf
+        }
+        $max = 8MB
+        if ($pic.PSObject.Properties.Name -contains 'offset') {
+            # DIB suelto (BITMAPINFOHEADER + paleta + píxeles) dentro del archivo: se le agrega la cabecera de archivo BMP.
+            $h = & $read ([long]$pic.offset) 40
+            $w = [BitConverter]::ToInt32($h, 4); $ht = [Math]::Abs([BitConverter]::ToInt32($h, 8))
+            $planes = [BitConverter]::ToUInt16($h, 12); $bpp = [BitConverter]::ToUInt16($h, 14); $comp = [BitConverter]::ToUInt32($h, 16)
+            $bytes = [BitConverter]::ToUInt32($h, 20); $used = [BitConverter]::ToUInt32($h, 32)
+            if ([BitConverter]::ToUInt32($h, 0) -ne 40 -or $planes -ne 1 -or $bpp -notin 4, 8, 24 -or $comp -notin 0, 1, 2 -or $w -lt 1 -or $w -gt 2048 -or $ht -lt 1 -or $ht -gt 2048) {
+                throw "No hay una imagen en $($pic.file) ($($pic.offset))."
+            }
+            $colors = $(if ($bpp -le 8) { $(if ($used) { $used } else { 1 -shl $bpp }) } else { 0 })
+            if ($comp -eq 0) { $bytes = [Math]::Floor(($w * $bpp + 31) / 32) * 4 * $ht }
+            $len = 40 + 4 * $colors + $bytes
+            if ($len -gt $max) { throw "La imagen de $($pic.file) es demasiado grande." }
+            $dib = & $read ([long]$pic.offset) ([int]$len)
+            $data = New-Object byte[] (14 + $len)
+            $data[0] = 0x42; $data[1] = 0x4D
+            [BitConverter]::GetBytes([uint32](14 + $len)).CopyTo($data, 2)
+            [BitConverter]::GetBytes([uint32](14 + 40 + 4 * $colors)).CopyTo($data, 10)
+            [Array]::Copy($dib, 0, $data, 14, $len)
+        } else {
+            if ($size -gt $max) { throw "La imagen $($pic.file) es demasiado grande." }
+            $data = & $read 0 ([int]$size)
+            if ($data.Length -lt 54 -or $data[0] -ne 0x42 -or $data[1] -ne 0x4D) { throw "$($pic.file) no es un BMP." }
+        }
+    } finally {
+        if ($fs) { $fs.Dispose() }
+        if ($iso) { $iso.Dispose() }
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dst) | Out-Null
+    [IO.File]::WriteAllBytes($dst, $data)
+    $dst
 }
 
 # ---------------------------------------------------------------------------
@@ -954,6 +1037,6 @@ function Complete-TrGame {
 Export-ModuleMember -Function Get-TrAppRoot, Get-TrNativeBin, Get-TrCatalog, Get-TrGame, ConvertTo-TrHashtable, Get-TrConfig, Save-TrConfig,
     Get-TrDefaultInstallRoot, Get-TrManifest, Save-TrManifest, Test-TrPrerequisites, Find-TrIsos, Expand-TrZipIsos, Mount-TrIso, Dismount-TrIso,
     New-TrSubst, Remove-TrSubst, Test-TrInstallRoot, Format-TrSize, Get-TrRequiredBytes, Set-TrIniValues, Write-TrGameConfig, Repair-TrSectionSizes, Copy-TrFromIso,
-    Get-TrCopySize, Install-TrRuntimeFiles, Get-TrRuntimeVersion, Test-TrSamePath, Register-TrRuntimeCopy, Get-TrOutdatedInstall, Install-TrGame, New-TrShortcuts, Remove-TrShortcuts, Get-TrInstalledGames, Backup-TrSaves,
+    Get-TrCopySize, Install-TrRuntimeFiles, Get-TrGuidePath, Get-TrRuntimeVersion, Test-TrSamePath, Register-TrRuntimeCopy, Get-TrOutdatedInstall, Install-TrGame, New-TrShortcuts, Remove-TrShortcuts, Get-TrInstalledGames, Save-TrArtSource, Backup-TrSaves,
     Get-TrSavesFolder, Test-TrSaveName, Get-TrSaveFiles, Export-TrAllSaves, Read-TrSavesZip, Import-TrSaves,
     Uninstall-TrGame, Get-TrRunningGame, Start-TrGame, Complete-TrGame

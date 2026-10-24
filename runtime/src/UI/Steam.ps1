@@ -12,6 +12,8 @@ function Invoke-TrAddToSteamUI {
     while ($true) {
         $sync = Invoke-TrWithProgress -Title 'Agregando los juegos a Steam…' -Owner $Owner -Marquee -Arguments @{ root = $Root; running = $running } -Script {
             param($sync, $a)
+            $sync.Message = 'Preparando las imágenes para Steam…'
+            Update-TrArtImages -Root $a.root
             if ($a.running) {
                 $sync.Message = 'Cerrando Steam…'
                 if (-not (Stop-TrSteam)) { throw (New-TrError 'TR-STM-002') }

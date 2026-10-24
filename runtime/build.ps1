@@ -62,7 +62,9 @@ $stage = Join-Path $dist $name
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 
 # Mismo contenido y mismo orden que build.sh.
-$files = @(foreach ($item in 'src', 'linux', 'native/bin', 'Trampolin.cmd', 'trampolin.sh', 'LEEME-RUNTIME.md', 'VERSION') {
+# El documento de usuario es README.md en la raíz del repositorio; en el paquete va como LEEME.txt.
+$files = @(foreach ($item in 'src', 'linux', 'native/bin', 'Trampolin.cmd', 'trampolin.sh', 'LEEME.txt', 'VERSION') {
+    if ($item -eq 'LEEME.txt') { [pscustomobject]@{ File = Get-Item (Join-Path (Split-Path -Parent $here) 'README.md'); Rel = $item }; continue }
     $p = Join-Path $here $item
     $found = if (Test-Path $p -PathType Leaf) { Get-Item $p } else { Get-ChildItem $p -Recurse -File }
     $list = [Collections.Generic.List[object]]::new()

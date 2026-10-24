@@ -139,7 +139,7 @@ function Show-TrGoogleSetupDialog {
     $btnConsole.Add_Click({ Start-Process $help.ConsoleUrl })
     $btnScope.Add_Click({ [System.Windows.Forms.Clipboard]::SetText($help.Scope); $btnScope.Text = 'Copiado ✓' })
     $btnMore.Add_Click({
-        $doc = @((Join-Path (Get-TrAppRoot) 'LEEME-RUNTIME.md'), (Join-Path (Split-Path -Parent (Get-TrAppRoot)) 'LEEME-RUNTIME.md')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        $doc = Get-TrGuidePath
         if ($doc) { Start-Process notepad.exe -ArgumentList ('"{0}"' -f $doc) }
     })
     $btnSave.Add_Click({

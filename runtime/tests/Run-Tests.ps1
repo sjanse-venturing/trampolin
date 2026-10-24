@@ -498,6 +498,89 @@ Test-Case 'Update-TrSteamShortcutsFile conserva los accesos ajenos y la última 
     Assert-True (Test-Path "$p.trampolin.bak") 'falta la copia del original'
 }
 
+Add-Type -AssemblyName System.Drawing
+function Get-TrTestImageSize { param([string]$Path) $i = [Drawing.Image]::FromFile($Path); try { "$($i.Width)x$($i.Height)" } finally { $i.Dispose() } }
+function New-TrArtFakeInstall {
+    <# Instalación mínima con un ejecutable real (con ícono) en lugar del exe de cada juego. #>
+    param([string]$Name, [string[]]$Ids)
+    $root = New-FakeInstall $Name $Ids
+    foreach ($id in $Ids) { Copy-Item (Join-Path $env:SystemRoot 'System32\notepad.exe') (Join-Path $root "games\$id\$((Get-TrGame $id).icon)") -Force }
+    $root
+}
+Test-Case 'Artwork de Steam: ícono ampliado sobre su color, con las medidas de Steam (juego sin imagen del disco)' {
+    $root = New-TrArtFakeInstall 'art1' @('PRE_K')
+    $dir = New-TrArtImages -Id 'PRE_K' -Root $root
+    Assert-True ((Get-TrTestImageSize "$dir\portrait.png") -eq '600x900' -and (Get-TrTestImageSize "$dir\header.png") -eq '920x430' -and (Get-TrTestImageSize "$dir\hero.png") -eq '1920x620') 'medidas'
+    Assert-True (-not (Test-Path "$dir\logo.png")) 'no debería tener logo'
+    $b = New-Object Drawing.Bitmap "$dir\portrait.png"
+    try {
+        Assert-True ($b.GetPixel(96, 246).ToArgb() -eq [Drawing.Color]::White.ToArgb()) 'falta el marco centrado'
+        Assert-True ($b.GetPixel(5, 5).ToArgb() -eq $b.GetPixel(595, 895).ToArgb()) 'el fondo no es de un solo color'
+    } finally { $b.Dispose() }
+    $t = (Get-Item "$dir\hero.png").LastWriteTime
+    Start-Sleep -Milliseconds 50
+    [void](New-TrArtImages -Id 'PRE_K' -Root $root)
+    Assert-True ((Get-Item "$dir\hero.png").LastWriteTime -eq $t) 'regeneró sin cambios en las fuentes'
+}
+Test-Case 'Artwork de Steam: imagen de la copia del disco, logo recortado por el polígono y copia a config\grid' {
+    $root = New-TrArtFakeInstall 'art2' @('3G')
+    # Caja sintética como la de 5° Curso: fondo rojo, «lápiz» azul dentro del polígono de la receta.
+    $boxPath = Join-Path $root 'cd\3G\SUPPORT\AUTORUN\SUPPORT\3G.BMP'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $boxPath) | Out-Null
+    $box = New-Object Drawing.Bitmap 363, 360, ([Drawing.Imaging.PixelFormat]::Format24bppRgb)
+    $g = [Drawing.Graphics]::FromImage($box)
+    $g.Clear([Drawing.Color]::FromArgb(255, 0, 0)); $g.FillRectangle([Drawing.Brushes]::Blue, 50, 235, 220, 70); $g.FillRectangle([Drawing.Brushes]::Green, 0, 0, 363, 200)
+    $g.Dispose(); $box.Save($boxPath, [Drawing.Imaging.ImageFormat]::Bmp); $box.Dispose()
+    $dir = New-TrArtImages -Id '3G' -Root $root
+    Assert-True (Test-Path (Join-Path $root 'games\3G\art\picture.bmp')) 'no guardó la imagen del disco'
+    Assert-True ((Get-TrTestImageSize "$dir\logo.png") -eq '900x230') 'medida del logo'
+    $l = New-Object Drawing.Bitmap "$dir\logo.png"
+    try {
+        Assert-True ($l.GetPixel(2, 2).A -eq 0) 'el borde del logo no es transparente (quedó el rojo de la caja)'
+        $c = $l.GetPixel(300, 115); Assert-True ($c.A -eq 255 -and $c.B -gt 200 -and $c.R -lt 50) "el centro del logo no es el lápiz ($c)"
+    } finally { $l.Dispose() }
+    $p = New-Object Drawing.Bitmap "$dir\portrait.png"
+    try { Assert-True ($p.GetPixel(300, 530).G -gt 100) 'falta la imagen del disco en la franja' } finally { $p.Dispose() }
+    # Copia a config\grid con el appid sin signo (Steam no necesita estar cerrado).
+    $cfg = Join-Path $root 'steam\userdata\42\config'
+    New-Item -ItemType Directory -Force -Path $cfg | Out-Null
+    $m = Get-Module Trampolin.Steam
+    & $m { param($c) $script:TestConfigDirs = $c; function script:Get-TrSteamUserConfigDirs { $script:TestConfigDirs } } $cfg
+    try {
+        $wanted = @(Get-TrWantedSteamShortcuts -Root $root)
+        Install-TrSteamArt -Root $root -Wanted $wanted
+        $u = [uint32]([int64]$wanted[1].appid -band 0xFFFFFFFFL)
+        $names = @(Get-ChildItem (Join-Path $cfg 'grid') | ForEach-Object Name | Sort-Object)
+        Assert-True (($names -join ',') -eq ((@("${u}_hero.png", "${u}_logo.png", "$u.png", "${u}p.png") | Sort-Object) -join ',')) "archivos: $($names -join ',')"
+    } finally { Import-Module (Join-Path $src 'Core\Trampolin.Steam.psm1') -Force }
+}
+Test-Case 'Imagen del disco guardada dentro de un archivo de recursos (DIB en un offset)' {
+    $root = New-TrArtFakeInstall 'art3' @('KG')
+    $pic = (Get-TrGame 'KG').art.picture
+    # DIB de 640x480 de 8 bits con paleta de grises, después de bytes cualesquiera.
+    $w = 640; $h = 480; $dib = New-Object byte[] (40 + 1024 + $w * $h)
+    [BitConverter]::GetBytes([uint32]40).CopyTo($dib, 0); [BitConverter]::GetBytes([int]$w).CopyTo($dib, 4); [BitConverter]::GetBytes([int]$h).CopyTo($dib, 8)
+    [BitConverter]::GetBytes([uint16]1).CopyTo($dib, 12); [BitConverter]::GetBytes([uint16]8).CopyTo($dib, 14)
+    for ($i = 0; $i -lt 256; $i++) { $dib[40 + 4 * $i] = $i; $dib[41 + 4 * $i] = $i; $dib[42 + 4 * $i] = $i }
+    for ($i = 0; $i -lt $w * $h; $i++) { $dib[1064 + $i] = 200 }
+    $file = New-Object byte[] ($pic.offset + $dib.Length + 100)
+    $dib.CopyTo($file, $pic.offset)
+    $rsc = Join-Path $root "cd\KG\$($pic.file)"
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $rsc) | Out-Null
+    [IO.File]::WriteAllBytes($rsc, $file)
+    $out = Save-TrArtSource -Id 'KG' -Root $root
+    Assert-True ((Get-TrTestImageSize $out) -eq '640x480') 'no quedó un BMP válido'
+    $b = New-Object Drawing.Bitmap $out
+    try { Assert-True ($b.GetPixel(10, 10).R -eq 200) 'píxeles' } finally { $b.Dispose() }
+    # Un offset que no apunta a una imagen es un error (no se escribe nada).
+    $root2 = New-TrArtFakeInstall 'art4' @('KG')
+    $rsc2 = Join-Path $root2 "cd\KG\$($pic.file)"
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $rsc2) | Out-Null
+    [IO.File]::WriteAllBytes($rsc2, (New-Object byte[] ($pic.offset + 2000)))
+    $failed = $false; try { [void](Save-TrArtSource -Id 'KG' -Root $root2) } catch { $failed = $true }
+    Assert-True ($failed -and -not (Test-Path (Join-Path $root2 'games\KG\art\picture.bmp'))) 'aceptó un offset sin imagen'
+}
+
 if ($IsoFolder) {
     Write-Host 'Integración con las imágenes reales'
     $found = $null
@@ -521,6 +604,25 @@ if ($IsoFolder) {
         $w = Get-Item (Join-Path $root "games\$($i.GameId)\WING32.DLL")
         Assert-True ($w.Length -ne 12800) 'quedó el WING32.DLL original'
         Assert-True ((Get-TrManifest -Root $root).games.Contains($i.GameId)) 'no quedó en el manifiesto'
+        $script:instGame = $i.GameId
+    }
+    Test-Case 'Artwork de Steam del juego instalado, con las medidas de Steam' {
+        $dir = New-TrArtImages -Id $script:instGame -Root (Join-Path $tmp 'inst')
+        foreach ($s in @(@('portrait.png', '600x900'), @('header.png', '920x430'), @('hero.png', '1920x620'))) {
+            Assert-True ((Get-TrTestImageSize (Join-Path $dir $s[0])) -eq $s[1]) "$($s[0])"
+        }
+    }
+    Test-Case 'La imagen del artwork de cada juego se lee de su disco (modo iso)' {
+        $ok = @($script:found.Isos | Where-Object { $_.Status -eq 'ok' -and ((Get-TrGame $_.GameId).PSObject.Properties.Name -contains 'art') })
+        $root = New-FakeInstall 'artiso' @($ok | ForEach-Object GameId)
+        $m = Get-TrManifest -Root $root
+        foreach ($i in $ok) { $m.games[$i.GameId].dataMode = 'iso'; $m.games[$i.GameId].isoPath = $i.Path }
+        Save-TrManifest -Root $root -Manifest $m
+        $expected = @{ KG = '640x480'; FG = '640x480'; '2G' = '640x480'; '3G' = '363x360'; '4G' = '357x360' }
+        foreach ($i in $ok) {
+            $p = Save-TrArtSource -Id $i.GameId -Root $root
+            Assert-True ($p -and (Get-TrTestImageSize $p) -eq $expected[$i.GameId]) "$($i.GameId): $(if ($p) { Get-TrTestImageSize $p } else { 'sin imagen' })"
+        }
     }
 }
 

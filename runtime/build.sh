@@ -46,15 +46,17 @@ name = 'TrampolinRuntime-%s' % version
 dist = os.path.join(here, 'dist')
 os.makedirs(dist, exist_ok=True)
 out = os.path.join(dist, name + '.zip')
-items = ['src', 'linux', 'native/bin', 'Trampolin.cmd', 'trampolin.sh', 'LEEME-RUNTIME.md', 'VERSION']
+# El documento de usuario es README.md en la raíz del repositorio; en el paquete va como LEEME.txt.
+items = ['src', 'linux', 'native/bin', 'Trampolin.cmd', 'trampolin.sh', 'LEEME.txt', 'VERSION']
+sources = {'LEEME.txt': os.path.join(os.path.dirname(here), 'README.md')}
 with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
     for item in items:
-        src = os.path.join(here, item)
+        src = sources.get(item, os.path.join(here, item))
         files = [src] if os.path.isfile(src) else [os.path.join(d, f) for d, ds, fs in os.walk(src) for f in fs if '__pycache__' not in d]
         for f in sorted(files):
             if f.endswith(('.pyc', '.lib', '.exp', '.pdb')):
                 continue
-            arc = name + '/' + os.path.relpath(f, here).replace(os.sep, '/')
+            arc = name + '/' + (item if item in sources else os.path.relpath(f, here).replace(os.sep, '/'))
             info = zipfile.ZipInfo.from_file(f, arc)
             info.create_system = 3                                   # Unix: se respetan los permisos
             info.external_attr = (0o100755 if f.endswith('.sh') else 0o100644) << 16

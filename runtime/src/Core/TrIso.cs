@@ -141,5 +141,20 @@ public sealed class TrIso : IDisposable {
         return e.Size;
     }
 
+    /// <summary>Lee un tramo de un archivo de la imagen (desde offset, length bytes).</summary>
+    public byte[] ReadRange(TrIsoEntry e, long offset, int length) {
+        if (offset < 0 || length < 0 || offset + length > e.Size)
+            throw new ArgumentOutOfRangeException("offset", "El tramo queda fuera de " + e.Path + ".");
+        byte[] buf = new byte[length];
+        fs.Seek(e.Lba * Sector + offset, SeekOrigin.Begin);
+        int read = 0;
+        while (read < length) {
+            int n = fs.Read(buf, read, length - read);
+            if (n <= 0) throw new EndOfStreamException("La imagen ISO está truncada (" + e.Path + ").");
+            read += n;
+        }
+        return buf;
+    }
+
     public void Dispose() { fs.Dispose(); }
 }

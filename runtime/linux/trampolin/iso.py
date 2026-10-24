@@ -146,3 +146,13 @@ class Iso:
             t = e.modified.timestamp()
             os.utime(destination, (t, t))
         return e.size
+
+    def read_range(self, e, offset, length):
+        """Lee un tramo de un archivo de la imagen (desde offset, length bytes)."""
+        if offset < 0 or length < 0 or offset + length > e.size:
+            raise ValueError('El tramo queda fuera de %s.' % e.path)
+        self._f.seek(e.lba * SECTOR + offset)
+        buf = self._f.read(length)
+        if len(buf) < length:
+            raise EOFError('La imagen ISO está truncada (%s).' % e.path)
+        return buf
