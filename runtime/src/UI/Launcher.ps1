@@ -1,9 +1,47 @@
 ﻿# Launcher.ps1 — "Biblioteca Trampolín": elegir y jugar los juegos instalados.
 
+function Invoke-TrRuntimeUpdateUI {
+    <#
+      Si se descomprimió una versión nueva sin instalarla, los accesos directos y Steam siguen
+      abriendo la vieja: ofrece actualizar la instalación. Con -Quiet (accesos directos y Steam) no
+      vuelve a preguntar por una versión que el usuario ya rechazó.
+    #>
+    param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)]$Config, $Owner = $null, [switch]$Quiet)
+    $old = Get-TrOutdatedInstall -Root $Root -Config $Config
+    if (-not $old -or ($Quiet -and $old.Declined)) { return }
+    $was = $(if ($old.Installed) { "la $($old.Installed)" } else { 'una anterior' })
+    $remember = {
+        if ($Config.newerCopy -is [Collections.IDictionary]) { $Config.newerCopy.declined = $true; Save-TrConfig $Config }
+    }
+    if (-not $old.SourceExists) {
+        Show-TrInfo -Title 'Hay una versión más nueva' -Owner $Owner -Message ("Trampolín $($old.Newer) se abrió desde «$($old.Source)», pero esa carpeta ya no está. " +
+            'Para actualizar, descomprimí de nuevo esa versión, abrí su Trampolin.cmd y elegí «Actualizar».')
+        Write-TrLog Warn "Instalación desactualizada ($was); la copia $($old.Newer) ya no está en $($old.Source)"
+        & $remember
+        return
+    }
+    $intro = $(if (Test-TrSamePath (Get-TrAppRoot) $old.Source) { "Estás usando Trampolín $($old.Newer), pero la versión instalada es $was." }
+        else { "Hay una versión más nueva de Trampolín ($($old.Newer)) en «$($old.Source)», pero la instalada es $was." })
+    $msg = "$intro Los accesos directos, el menú Inicio y Steam abren la versión instalada, así que ahí no vas a ver las correcciones nuevas.`r`n`r`n" +
+        '¿Actualizar la instalación ahora? Los juegos y las partidas no se tocan.'
+    if (-not (Show-TrConfirm -Title 'La versión instalada es más vieja' -Message $msg -Yes 'Actualizar' -No 'Jugar sin actualizar' -Owner $Owner)) {
+        Write-TrLog Warn "Instalación desactualizada ($was, hay $($old.Newer) en $($old.Source)): el usuario eligió no actualizar"
+        & $remember
+        return
+    }
+    try {
+        Install-TrRuntimeFiles -Root $Root -Source $old.Source | Out-Null
+        Write-TrLog Info "Instalación actualizada a $($old.Newer) desde $($old.Source)"
+        Show-TrInfo -Title 'Instalación actualizada' -Message "Trampolín $($old.Newer) quedó instalado. Los accesos directos y Steam ya usan esta versión." -Owner $Owner
+    } catch {
+        [void](Show-TrError $_ $Owner)
+    }
+}
+
 function Show-TrLauncher {
     param([Parameter(Mandatory)]$Config)
 
-    $state = @{ session = $null; reopenWizard = $false; preselect = @() }
+    $state = @{ session = $null; reopenWizard = $false; preselect = @(); versionChecked = $false }
     $form = New-TrForm -Title 'Biblioteca Trampolín' -Width 1060 -Height 620 -Resizable
     $form.MinimumSize = New-Object System.Drawing.Size(640, 480)
     $header = New-TrHeader -Title 'Biblioteca Trampolín' -Subtitle 'Elegí un juego y presioná «Jugar»'
@@ -107,6 +145,7 @@ function Show-TrLauncher {
 
     $startGame = {
         param([string]$Id)
+        if (-not $state.versionChecked) { $state.versionChecked = $true; Invoke-TrRuntimeUpdateUI -Root $root -Config $Config -Owner $form }
         if (-not (Invoke-TrSyncBeforePlayUI -Id $Id -Root $root -Config $Config -Owner $form)) { return }
         $attempt = 0
         while ($attempt -lt 3) {

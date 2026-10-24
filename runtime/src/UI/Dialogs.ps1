@@ -73,11 +73,12 @@ function Show-TrError {
 
 function Show-TrConfirm {
     param([string]$Title, [string]$Message, [string]$Yes = 'Sí', [string]$No = 'No', $Owner = $null)
-    $f = New-TrForm -Title 'Trampolín' -Width 500 -Height 200
+    $extra = Get-TrExtraHeight -Text $Message -Width 460 -Height 80
+    $f = New-TrForm -Title 'Trampolín' -Width 500 -Height (200 + $extra)
     $t = New-TrLabel -Text $Title -X 20 -Y 18 -Width 460 -Font $global:TrTheme.FontBig
-    $m = New-TrLabel -Text $Message -X 20 -Y 52 -Width 460 -Height 80
-    $by = New-TrButton -Text $Yes -Width 140 -Primary; $by.Location = New-Object System.Drawing.Point(340, 145)
-    $bn = New-TrButton -Text $No -Width 140; $bn.Location = New-Object System.Drawing.Point(190, 145)
+    $m = New-TrLabel -Text $Message -X 20 -Y 52 -Width 460 -Height (80 + $extra)
+    $by = New-TrButton -Text $Yes -Width 140 -Primary; $by.Location = New-Object System.Drawing.Point(340, (145 + $extra))
+    $bn = New-TrButton -Text $No -Width 160; $bn.Location = New-Object System.Drawing.Point(170, (145 + $extra))
     $by.DialogResult = 'Yes'; $bn.DialogResult = 'No'
     $f.Controls.AddRange(@($t, $m, $by, $bn)); $f.AcceptButton = $by; $f.CancelButton = $bn
     $r = $f.ShowDialog($Owner); $f.Dispose()

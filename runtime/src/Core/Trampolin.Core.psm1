@@ -87,7 +87,7 @@ function Get-TrConfig {
     if (-not $cfg) {
         $cfg = [ordered]@{ installRoot = $null; isoFolder = $null; dataMode = 'copy'; scale = 0; desktopShortcuts = $true }
     }
-    foreach ($k in @('installRoot', 'isoFolder', 'dataMode', 'scale', 'desktopShortcuts', 'steamShortcuts', 'sync')) {
+    foreach ($k in @('installRoot', 'isoFolder', 'dataMode', 'scale', 'desktopShortcuts', 'steamShortcuts', 'sync', 'newerCopy')) {
         if (-not $cfg.Contains($k)) { $cfg[$k] = $null }
     }
     if (-not $cfg.dataMode) { $cfg.dataMode = 'copy' }
@@ -457,17 +457,23 @@ function Get-TrCopySize {
 # ---------------------------------------------------------------------------
 
 function Install-TrRuntimeFiles {
-    <# Copia el programa a <Root>\app para que la instalación no dependa de la carpeta de descarga. #>
-    param([Parameter(Mandatory)][string]$Root)
+    <#
+      Copia el programa a <Root>\app para que la instalación no dependa de la carpeta de descarga.
+      $Source: carpeta de la copia a instalar (por defecto, esta; la instalada la usa para actualizarse
+      desde una copia más nueva).
+    #>
+    param([Parameter(Mandatory)][string]$Root, [string]$Source = $script:AppRoot)
     $app = Join-Path $Root 'app'
-    $src = $script:AppRoot
-    if ([IO.Path]::GetFullPath($src).TrimEnd('\') -ieq [IO.Path]::GetFullPath($app).TrimEnd('\')) { return $app }
+    $src = $Source
+    if (Test-TrSamePath $src $app) { return $app }
+    $binSrc = @((Join-Path $src 'native\bin'), (Join-Path $src 'bin')) | Where-Object { Test-Path -LiteralPath (Join-Path $_ 'trlaunch.exe') } | Select-Object -First 1
+    if (-not $binSrc) { $binSrc = Join-Path $src 'native\bin' }
     New-Item -ItemType Directory -Force -Path $app | Out-Null
     Copy-Item -LiteralPath (Join-Path $src 'src') -Destination $app -Recurse -Force
     $binDst = Join-Path $app 'native\bin'
     New-Item -ItemType Directory -Force -Path $binDst | Out-Null
-    Copy-Item -Path (Join-Path (Get-TrNativeBin) '*') -Destination $binDst -Force
-    foreach ($f in @('Trampolin.cmd', 'LEEME-RUNTIME.md')) {
+    Copy-Item -Path (Join-Path $binSrc '*') -Destination $binDst -Force
+    foreach ($f in @('Trampolin.cmd', 'LEEME-RUNTIME.md', 'VERSION')) {
         $p = Join-Path $src $f
         if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination $app -Force }
     }
@@ -478,6 +484,82 @@ function Install-TrRuntimeFiles {
     [IO.File]::WriteAllLines((Join-Path $Root 'Trampolin.cmd'), $cmd, [Text.Encoding]::ASCII)
     if (Test-Path -LiteralPath (Join-Path $src 'LEEME-RUNTIME.md')) { Copy-Item -LiteralPath (Join-Path $src 'LEEME-RUNTIME.md') -Destination $Root -Force }
     $app
+}
+
+function Get-TrRuntimeVersion {
+    <# Versión de una copia del programa (archivo VERSION en su carpeta); $null si no se conoce. #>
+    param([string]$AppRoot = $script:AppRoot)
+    $p = Join-Path $AppRoot 'VERSION'
+    if (-not (Test-Path -LiteralPath $p)) { return $null }
+    $v = $null
+    if ([version]::TryParse("$(Get-Content -LiteralPath $p -TotalCount 1)".Trim(), [ref]$v)) { return $v }
+    $null
+}
+
+function Test-TrSamePath {
+    param([string]$A, [string]$B)
+    $A -and $B -and ([IO.Path]::GetFullPath($A).TrimEnd('\') -ieq [IO.Path]::GetFullPath($B).TrimEnd('\'))
+}
+
+function Test-TrRuntimeCopy { param([string]$Path) $Path -and (Test-Path -LiteralPath (Join-Path $Path 'src\Trampolin.ps1')) }
+
+function Register-TrRuntimeCopy {
+    <#
+      Si esta copia (por ejemplo, un ZIP recién descomprimido) es más nueva que la instalada en
+      <Root>\app, anota su versión y carpeta en la configuración, que comparten todas las copias.
+      Así la instalada —la que abren los accesos directos y Steam— puede ofrecer actualizarse.
+      Devuelve $true si cambió $Config (hay que guardarla).
+    #>
+    param([Parameter(Mandatory)]$Config, [Parameter(Mandatory)][string]$Root)
+    $app = Join-Path $Root 'app'
+    if ((Test-TrSamePath $script:AppRoot $app) -or -not (Test-TrRuntimeCopy $app)) { return $false }
+    $current = Get-TrRuntimeVersion
+    if (-not $current) { return $false }
+    $installed = Get-TrRuntimeVersion -AppRoot $app
+    if ($installed -and $installed -ge $current) { return $false }
+    $known = $Config.newerCopy
+    if ($known -is [Collections.IDictionary] -and (Test-TrRuntimeCopy $known.path)) {
+        $v = $null
+        if ([version]::TryParse([string]$known.version, [ref]$v)) {
+            if ($v -gt $current) { return $false }                                     # ya hay una más nueva anotada
+            if ($v -eq $current -and (Test-TrSamePath $known.path $script:AppRoot)) { return $false }
+        }
+    }
+    $Config.newerCopy = [ordered]@{ version = $current.ToString(); path = $script:AppRoot; declined = $false }
+    $true
+}
+
+function Get-TrOutdatedInstall {
+    <#
+      ¿La instalación en <Root>\app —la que abren los accesos directos y Steam— es más vieja que
+      otra copia del programa? Desde otra copia se compara con ella misma; desde la instalada, con
+      la copia más nueva anotada por Register-TrRuntimeCopy en $Config.
+      Devuelve $null si no hay nada que avisar, o Newer, Installed ($null: instalación anterior a
+      que se guardara la versión), Source (carpeta de la copia nueva), SourceExists y Declined
+      (el usuario ya eligió no actualizar a esa versión).
+    #>
+    param([Parameter(Mandatory)][string]$Root, $Config)
+    $app = Join-Path $Root 'app'
+    if (-not (Test-TrRuntimeCopy $app)) { return $null }
+    $declined = $false
+    if (Test-TrSamePath $script:AppRoot $app) {
+        $known = $(if ($Config) { $Config.newerCopy })
+        if (-not ($known -is [Collections.IDictionary])) { return $null }
+        $newer = $null
+        if (-not [version]::TryParse([string]$known.version, [ref]$newer)) { return $null }
+        $source = [string]$known.path
+        $exists = Test-TrRuntimeCopy $source
+        if ($exists) { $v = Get-TrRuntimeVersion -AppRoot $source; if ($v) { $newer = $v } }   # pudo cambiar desde que se anotó
+        $declined = [bool]$known.declined
+    } else {
+        $newer = Get-TrRuntimeVersion
+        if (-not $newer) { return $null }
+        $source = $script:AppRoot
+        $exists = $true
+    }
+    $installed = Get-TrRuntimeVersion -AppRoot $app
+    if ($installed -and $installed -ge $newer) { return $null }
+    [pscustomobject]@{ Newer = $newer; Installed = $installed; Source = $source; SourceExists = [bool]$exists; Declined = $declined }
 }
 
 function Install-TrGame {
@@ -872,6 +954,6 @@ function Complete-TrGame {
 Export-ModuleMember -Function Get-TrAppRoot, Get-TrNativeBin, Get-TrCatalog, Get-TrGame, ConvertTo-TrHashtable, Get-TrConfig, Save-TrConfig,
     Get-TrDefaultInstallRoot, Get-TrManifest, Save-TrManifest, Test-TrPrerequisites, Find-TrIsos, Expand-TrZipIsos, Mount-TrIso, Dismount-TrIso,
     New-TrSubst, Remove-TrSubst, Test-TrInstallRoot, Format-TrSize, Get-TrRequiredBytes, Set-TrIniValues, Write-TrGameConfig, Repair-TrSectionSizes, Copy-TrFromIso,
-    Get-TrCopySize, Install-TrRuntimeFiles, Install-TrGame, New-TrShortcuts, Remove-TrShortcuts, Get-TrInstalledGames, Backup-TrSaves,
+    Get-TrCopySize, Install-TrRuntimeFiles, Get-TrRuntimeVersion, Test-TrSamePath, Register-TrRuntimeCopy, Get-TrOutdatedInstall, Install-TrGame, New-TrShortcuts, Remove-TrShortcuts, Get-TrInstalledGames, Backup-TrSaves,
     Get-TrSavesFolder, Test-TrSaveName, Get-TrSaveFiles, Export-TrAllSaves, Read-TrSavesZip, Import-TrSaves,
     Uninstall-TrGame, Get-TrRunningGame, Start-TrGame, Complete-TrGame

@@ -91,6 +91,58 @@ Test-Case 'Set-TrIniValues escribe en ANSI (los juegos usan APIs "A")' {
     Assert-True ($bytes -contains 0xED) 'la í no se guardó como byte ANSI 0xED'
 }
 
+Write-Host 'Versión instalada'
+Test-Case 'Avisa si la instalación es más vieja que esta copia y deja de avisar al actualizar' {
+    $root = Join-Path $tmp 'version'
+    $app = Join-Path $root 'app'
+    $current = Get-TrRuntimeVersion
+    Assert-True ($current -is [version]) 'esta copia no informa su versión (falta VERSION)'
+    Assert-True ($null -eq (Get-TrOutdatedInstall -Root $root)) 'avisó sin nada instalado'
+    New-Item -ItemType Directory -Force -Path (Join-Path $app 'src') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $app 'src\Trampolin.ps1'), '#')
+    $old = Get-TrOutdatedInstall -Root $root
+    Assert-True ($old -and $null -eq $old.Installed -and $old.Newer -eq $current -and $old.SourceExists) 'no avisó con una instalación sin VERSION'
+    [IO.File]::WriteAllText((Join-Path $app 'VERSION'), "1.0.8`n")
+    Assert-True ((Get-TrOutdatedInstall -Root $root).Installed -eq [version]'1.0.8') 'no avisó con una instalación 1.0.8'
+    [IO.File]::WriteAllText((Join-Path $app 'VERSION'), "99.0.0`n")
+    Assert-True ($null -eq (Get-TrOutdatedInstall -Root $root)) 'avisó con una instalación más nueva'
+    Remove-Item -LiteralPath (Join-Path $app 'VERSION')
+    Install-TrRuntimeFiles -Root $root | Out-Null
+    Assert-True ((Get-TrRuntimeVersion -AppRoot $app) -eq $current) 'la instalación no guardó su versión'
+    Assert-True ($null -eq (Get-TrOutdatedInstall -Root $root)) 'siguió avisando después de actualizar'
+}
+
+Test-Case 'Desde un acceso directo (la instalada) avisa de la copia más nueva anotada y se actualiza desde ella' {
+    $core = Get-Module Trampolin.Core
+    $self = & $core { $script:AppRoot }
+    $root = Join-Path $tmp 'version2'
+    $app = Join-Path $root 'app'
+    New-Item -ItemType Directory -Force -Path (Join-Path $app 'src') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $app 'src\Trampolin.ps1'), '#')
+    [IO.File]::WriteAllText((Join-Path $app 'VERSION'), "1.0.8`n")
+    $cfg = [ordered]@{ newerCopy = $null }
+    Assert-True (Register-TrRuntimeCopy -Config $cfg -Root $root) 'esta copia no se anotó'
+    Assert-True (-not (Register-TrRuntimeCopy -Config $cfg -Root $root)) 'se volvió a anotar sin cambios'
+    $cfg.newerCopy.declined = $true
+    Assert-True (-not (Register-TrRuntimeCopy -Config $cfg -Root $root)) 'abrir la misma copia borró el «no actualizar»'
+    $cfg.newerCopy.declined = $false
+    try {
+        & $core { param($p) $script:AppRoot = $p } $app          # ahora "somos" la instalada
+        Assert-True (-not (Register-TrRuntimeCopy -Config $cfg -Root $root)) 'la instalada se anotó a sí misma'
+        $old = Get-TrOutdatedInstall -Root $root -Config $cfg
+        Assert-True ($old -and $old.Installed -eq [version]'1.0.8' -and (Test-TrSamePath $old.Source $self) -and $old.SourceExists -and -not $old.Declined) 'la instalada no avisó'
+        Assert-True ($null -eq (Get-TrOutdatedInstall -Root $root -Config ([ordered]@{ newerCopy = $null }))) 'avisó sin nada anotado'
+        $gone = [ordered]@{ newerCopy = [ordered]@{ version = '9.9.9'; path = (Join-Path $tmp 'borrada'); declined = $false } }
+        $old = Get-TrOutdatedInstall -Root $root -Config $gone
+        Assert-True ($old -and -not $old.SourceExists -and $old.Newer -eq [version]'9.9.9') 'no detectó la copia borrada'
+    } finally { & $core { param($p) $script:AppRoot = $p } $self }
+    Install-TrRuntimeFiles -Root $root -Source $self | Out-Null
+    Assert-True ((Get-TrRuntimeVersion -AppRoot $app) -eq (Get-TrRuntimeVersion)) 'no se actualizó desde la copia anotada'
+    & $core { param($p) $script:AppRoot = $p } $app
+    try { Assert-True ($null -eq (Get-TrOutdatedInstall -Root $root -Config $cfg)) 'siguió avisando después de actualizar' }
+    finally { & $core { param($p) $script:AppRoot = $p } $self }
+}
+
 Write-Host 'Partidas (exportar / importar, mismo formato que Linux)'
 function New-FakeInstall {
     <# Instalación mínima: manifiesto y el exe de cada juego, sin copiar discos. #>

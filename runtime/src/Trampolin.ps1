@@ -50,6 +50,12 @@ $config = Get-TrConfig
 $logRoot = $(if ($config.installRoot) { Join-Path $config.installRoot 'logs' } else { Join-Path $env:LOCALAPPDATA 'Trampolin\logs' })
 Initialize-TrLog $logRoot
 
+# Si esta copia es más nueva que la instalada, se anota para que los accesos directos y Steam lo avisen.
+if ($config.installRoot) {
+    try { if (Register-TrRuntimeCopy -Config $config -Root $config.installRoot) { Save-TrConfig $config } }
+    catch { Write-TrLog Warn "No se pudo anotar la versión de esta copia: $_" }
+}
+
 # Último recurso: cualquier error no previsto se muestra amigablemente.
 trap {
     Write-TrLog Error "Error no controlado: $_`n$($_.ScriptStackTrace)"
@@ -61,6 +67,7 @@ function Invoke-TrPlay {
     param([string]$Id)
     $cfg = Get-TrConfig
     if (-not $cfg.installRoot) { throw (New-TrError 'TR-RUN-006' @{ game = $Id }) }
+    Invoke-TrRuntimeUpdateUI -Root $cfg.installRoot -Config $cfg -Quiet
     if (-not (Invoke-TrSyncBeforePlayUI -Id $Id -Root $cfg.installRoot -Config $cfg)) { return }
     $session = $null
     try {

@@ -46,7 +46,7 @@ name = 'TrampolinRuntime-%s' % version
 dist = os.path.join(here, 'dist')
 os.makedirs(dist, exist_ok=True)
 out = os.path.join(dist, name + '.zip')
-items = ['src', 'linux', 'native/bin', 'Trampolin.cmd', 'trampolin.sh', 'LEEME-RUNTIME.md']
+items = ['src', 'linux', 'native/bin', 'Trampolin.cmd', 'trampolin.sh', 'LEEME-RUNTIME.md', 'VERSION']
 with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
     for item in items:
         src = os.path.join(here, item)

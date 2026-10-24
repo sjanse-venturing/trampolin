@@ -174,6 +174,7 @@ Al importar:
 | **«El juego se cerró al iniciar»** | Usá **Reparar**. Si sigue pasando, mirá la fila siguiente. |
 | **«Un antivirus bloquea…» / «No se pudo iniciar»** | Para funcionar en Windows moderno, Trampolín Runtime agrega una pequeña capa de compatibilidad al juego (`trhook.dll`). Algunos antivirus la confunden con algo peligroso. Agregá la carpeta de instalación a las excepciones del antivirus. |
 | **«Couldn't save data to file» al escribir el nombre** (Educación Infantil) | Está corregido desde la versión 1.0.1 de Trampolín Runtime: actualizá a esa versión o a una posterior. |
+| **«La versión instalada es más vieja»** | Descomprimiste una versión nueva, pero los accesos directos, el menú Inicio y Steam siguen abriendo la instalada. Presioná **Actualizar** (los juegos y las partidas no se tocan). El aviso aparece al jugar desde la Biblioteca de la versión nueva y también desde los accesos directos o Steam, si alguna vez abriste la versión nueva. Si elegís *Jugar sin actualizar*, los accesos directos y Steam no vuelven a preguntar por esa versión; la Biblioteca sí. |
 | **No se escucha la música** | Verificá el volumen de Windows y que haya un dispositivo de salida de audio activo. |
 | **Ya hay un juego abierto** | Solo se puede jugar a uno por vez. Cerralo antes de abrir otro. |
 | **Steam Deck: el juego queda con la pantalla en negro** | Instalá **Proton 10.0** desde Steam (*Biblioteca* → *Herramientas*). En la Biblioteca Trampolín → *Opciones…* → *Versión de Proton* elegí *Automática* o *Proton 10.0*. |
