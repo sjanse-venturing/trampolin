@@ -938,7 +938,7 @@ function Get-TrSyncStatus {
     }
 }
 
-Export-ModuleMember -Function Get-TrSuggestedSyncFolder, Save-TrGoogleClient, Get-TrGoogleHelpInfo, ConvertTo-TrJsonText, Get-TrSyncSettings, Get-TrGoogleSettings, Test-TrDriveAvailable, Get-TrSyncConfig, Test-TrSyncEnabled,
+Export-ModuleMember -Function Get-TrSuggestedSyncFolder, Save-TrGoogleClient, Get-TrGoogleHelpInfo, ConvertTo-TrJsonText, ConvertFrom-TrJsonStrict, Get-TrSyncSettings, Get-TrGoogleSettings, Test-TrDriveAvailable, Get-TrSyncConfig, Test-TrSyncEnabled,
     Get-TrSyncState, Format-TrSyncDate, ConvertFrom-TrSyncIso, ConvertTo-TrSyncIso, Get-TrBundleHash, Get-TrSha256, Test-TrSyncName, Get-TrSyncFiles,
     Get-TrSyncLocalInfo, New-TrSyncBundle, Test-TrSyncBundle, Install-TrSyncBundle, New-TrFolderBackend, New-TrDriveBackend, Get-TrSyncBackend,
     Invoke-TrHttp, Test-TrSyncBackend, Get-TrRemoteMeta, Receive-TrRemote, Send-TrRemote, Start-TrDriveLink, Get-TrDriveLinkResult, Get-TrDriveEmail,
