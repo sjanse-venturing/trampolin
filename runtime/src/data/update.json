@@ -1,0 +1,11 @@
+{
+  "repo": "sjanse-venturing/trampolin",
+  "latestUrl": "https://api.github.com/repos/{repo}/releases/latest",
+  "asset": "TrampolinRuntime-{version}.zip",
+  "checksum": "TrampolinRuntime-{version}.zip.sha256",
+  "timeoutSeconds": 5,
+  "downloadTimeoutSeconds": 60,
+  "minCheckMinutes": 15,
+  "maxZipBytes": 52428800,
+  "notes": "Actualizaciones automáticas desde las versiones publicadas en GitHub (ver .github/workflows/ci.yml y CHANGELOG.md). La variable TRAMPOLIN_UPDATE_URL reemplaza latestUrl (para pruebas); TRAMPOLIN_NO_UPDATE=1 las desactiva."
+}

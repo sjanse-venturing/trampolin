@@ -22,6 +22,7 @@ try {
     Import-Module (Join-Path $here 'Core\Trampolin.Core.psm1') -Force
     Import-Module (Join-Path $here 'Core\Trampolin.Sync.psm1') -Force
     Import-Module (Join-Path $here 'Core\Trampolin.Steam.psm1') -Force
+    Import-Module (Join-Path $here 'Core\Trampolin.Update.psm1') -Force
     . (Join-Path $here 'UI\Theme.ps1')
     . (Join-Path $here 'UI\Dialogs.ps1')
     . (Join-Path $here 'UI\Sync.ps1')
@@ -67,6 +68,7 @@ function Invoke-TrPlay {
     param([string]$Id)
     $cfg = Get-TrConfig
     if (-not $cfg.installRoot) { throw (New-TrError 'TR-RUN-006' @{ game = $Id }) }
+    Invoke-TrReleaseUpdateUI -Root $cfg.installRoot -Arguments @('--play', $Id)
     Invoke-TrRuntimeUpdateUI -Root $cfg.installRoot -Config $cfg -Quiet
     if (-not (Invoke-TrSyncBeforePlayUI -Id $Id -Root $cfg.installRoot -Config $cfg)) { return }
     $session = $null
@@ -88,6 +90,10 @@ function Invoke-TrPlay {
 function Invoke-TrMain {
     param([string]$Mode)
     $openWizard = ($Mode -eq 'install')
+    $cfg = Get-TrConfig
+    if ($cfg.installRoot -and @(Get-TrInstalledGames -Root $cfg.installRoot).Count -gt 0) {
+        Invoke-TrReleaseUpdateUI -Root $cfg.installRoot -Arguments $(if ($openWizard) { @('--install') } else { @() })
+    }
     while ($true) {
         $cfg = Get-TrConfig
         $hasGames = $cfg.installRoot -and @(Get-TrInstalledGames -Root $cfg.installRoot).Count -gt 0

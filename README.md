@@ -69,6 +69,15 @@ En la biblioteca, el botón **···** de cada juego ofrece:
 
 Abajo hay botones para **Agregar juegos…**, **Partidas ▾** (*Exportar todas las partidas…*, *Importar partidas…*, *Abrir la carpeta de copias*), **Sincronización…** (sección 6), **Agregar a Steam**, cambiar el **tamaño de pantalla** (*Opciones…*), ver esta **Ayuda** y **Ver registro** (para pedir ayuda técnica).
 
+### Actualizaciones
+
+Trampolín se actualiza solo. Al abrir la biblioteca o un juego (también desde Steam o un acceso directo), si hay una versión nueva publicada aparece **«Hay una versión nueva de Trampolín»** con la lista de novedades:
+
+- **Actualizar** la descarga, la verifica y la instala en unos segundos, y Trampolín se vuelve a abrir solo (si estabas abriendo un juego, sigue con el juego). Los juegos y las partidas no se tocan.
+- **Ahora no** sigue con la versión que tenés; se vuelve a ofrecer la próxima vez.
+
+Hace falta Internet solo para buscar y descargar la actualización; sin conexión, Trampolín funciona igual. Las versiones y sus novedades están en la página del proyecto en GitHub (*Releases*).
+
 ## 5. Steam Deck (y Linux)
 
 ### Qué necesitás
@@ -174,6 +183,7 @@ Al importar:
 | **«El juego se cerró al iniciar»** | Usá **Reparar**. Si sigue pasando, mirá la fila siguiente. |
 | **«Un antivirus bloquea…» / «No se pudo iniciar»** | Para funcionar en Windows moderno, Trampolín Runtime agrega una pequeña capa de compatibilidad al juego (`trhook.dll`). Algunos antivirus la confunden con algo peligroso. Agregá la carpeta de instalación a las excepciones del antivirus. |
 | **«Couldn't save data to file» al escribir el nombre** (Educación Infantil) | Está corregido desde la versión 1.0.1 de Trampolín Runtime: actualizá a esa versión o a una posterior. |
+| **«No se pudo descargar la actualización» / «La actualización llegó dañada»** | Seguís con la versión que tenías y podés jugar normalmente. Revisá la conexión a Internet: se vuelve a ofrecer la próxima vez que abras Trampolín. Si el aviso se repite, descargá la versión nueva a mano desde la página del proyecto en GitHub (*Releases*), descomprimila y abrí su `Trampolin.cmd` (o `trampolin.sh`). |
 | **«La versión instalada es más vieja»** | Descomprimiste una versión nueva, pero los accesos directos, el menú Inicio y Steam siguen abriendo la instalada. Presioná **Actualizar** (los juegos y las partidas no se tocan). El aviso aparece al jugar desde la Biblioteca de la versión nueva y también desde los accesos directos o Steam, si alguna vez abriste la versión nueva. Si elegís *Jugar sin actualizar*, los accesos directos y Steam no vuelven a preguntar por esa versión; la Biblioteca sí. |
 | **No se escucha la música** | Verificá el volumen de Windows y que haya un dispositivo de salida de audio activo. |
 | **Ya hay un juego abierto** | Solo se puede jugar a uno por vez. Cerralo antes de abrir otro. |

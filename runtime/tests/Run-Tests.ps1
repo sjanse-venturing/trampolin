@@ -12,6 +12,7 @@ Import-Module (Join-Path $src 'Core\Trampolin.Errors.psm1') -Force
 Import-Module (Join-Path $src 'Core\Trampolin.Core.psm1') -Force
 Import-Module (Join-Path $src 'Core\Trampolin.Sync.psm1') -Force
 Import-Module (Join-Path $src 'Core\Trampolin.Steam.psm1') -Force
+Import-Module (Join-Path $src 'Core\Trampolin.Update.psm1') -Force
 Add-Type -AssemblyName System.IO.Compression, System.Web.Extensions
 Import-TrStrings (Join-Path $src 'data\strings.es.json')
 
@@ -142,6 +143,139 @@ Test-Case 'Desde un acceso directo (la instalada) avisa de la copia más nueva a
     try { Assert-True ($null -eq (Get-TrOutdatedInstall -Root $root -Config $cfg)) 'siguió avisando después de actualizar' }
     finally { & $core { param($p) $script:AppRoot = $p } $self }
 }
+
+Write-Host 'Actualizaciones (versiones publicadas en GitHub, mismas reglas que Linux)'
+Set-TrUpdateStateFile (Join-Path $tmp 'update-state.json')
+$env:TRAMPOLIN_NO_UPDATE = $null
+$env:TRAMPOLIN_UPDATE_URL = 'https://x/latest'
+function New-TestPackage {
+    <# ZIP mínimo con la forma del de build.ps1. $Extra: ruta relativa (o completa si empieza con '../') → texto. #>
+    param([string]$Version, [hashtable]$Extra = @{}, [string[]]$Skip = @())
+    $prefix = "TrampolinRuntime-$Version/"
+    $files = [ordered]@{}
+    foreach ($r in 'VERSION', 'trampolin.sh', 'Trampolin.cmd', 'linux/main.py', 'src/Trampolin.ps1', 'src/data/games.json',
+        'native/bin/trlaunch.exe', 'native/bin/trhook.dll', 'native/bin/WING32.DLL') { if ($r -notin $Skip) { $files[$r] = 'x' } }
+    if ($files.Contains('VERSION')) { $files['VERSION'] = "$Version`n" }
+    foreach ($k in $Extra.Keys) { $files[$k] = $Extra[$k] }
+    $ms = New-Object IO.MemoryStream
+    $z = New-Object IO.Compression.ZipArchive($ms, [IO.Compression.ZipArchiveMode]::Create, $true)
+    foreach ($k in $files.Keys) {
+        $name = $(if ($k.StartsWith('../')) { $k } else { $prefix + $k })
+        $w = New-Object IO.StreamWriter($z.CreateEntry($name).Open())
+        $w.Write($files[$k]); $w.Dispose()
+    }
+    $z.Dispose()
+    , $ms.ToArray()
+}
+function New-TestGitHub {
+    <# Transporte falso: publica $Version con $Package (y la suma $Sha) y anota las llamadas. #>
+    param([string]$Version, [byte[]]$Package, [string]$Sha, [hashtable]$Extra = @{})
+    $gh = @{ calls = [Collections.ArrayList]::new(); routes = @{} }
+    if (-not $Sha) { $Sha = Get-TrSha256 $Package }
+    $name = "TrampolinRuntime-$Version.zip"
+    $gh.routes["https://x/$name"] = $Package
+    $gh.routes["https://x/$name.sha256"] = [Text.Encoding]::ASCII.GetBytes("$Sha  $name`n")
+    $rel = @{ tag_name = "v$Version"; body = "### Agregado`n- Algo nuevo"; html_url = 'https://x/r'
+        assets = @(@{ name = $name; browser_download_url = "https://x/$name" }, @{ name = "$name.sha256"; browser_download_url = "https://x/$name.sha256" }) }
+    foreach ($k in $Extra.Keys) { $rel[$k] = $Extra[$k] }
+    $gh.routes['https://x/latest'] = [Text.Encoding]::UTF8.GetBytes((ConvertTo-TrJsonText $rel))
+    $gh.transport = {
+        param($Method, $Url, $Headers, $Body, $Timeout)
+        [void]$gh.calls.Add($Url)
+        if ($gh.routes.ContainsKey($Url)) { @{ Status = 200; Body = $gh.routes[$Url] } } else { @{ Status = 404; Body = [byte[]]@() } }
+    }.GetNewClosure()
+    $gh
+}
+function Reset-TestUpdateState { Remove-Item -LiteralPath (Join-Path $tmp 'update-state.json') -ErrorAction SilentlyContinue }
+function New-TestInstall {
+    param([string]$Name, [string]$Version = '1.2.0')
+    $root = Join-Path $tmp $Name
+    New-Item -ItemType Directory -Force -Path (Join-Path $root 'app') | Out-Null
+    if ($Version) { [IO.File]::WriteAllText((Join-Path $root 'app\VERSION'), "$Version`n") }
+    $root
+}
+
+Test-Case 'Versiones: v1.2 = 1.2.0, 1.10 > 1.9, no acepta sufijos' {
+    Assert-True ((ConvertTo-TrVersion 'v1.2') -eq [version]'1.2.0') 'v1.2'
+    Assert-True ((ConvertTo-TrVersion '1.10.0') -gt (ConvertTo-TrVersion '1.9.9')) '1.10 > 1.9'
+    Assert-True ($null -eq (ConvertTo-TrVersion '1.2.0-beta')) 'aceptó un sufijo'
+}
+Test-Case 'Solo ofrece versiones publicadas con paquete y más nuevas que la instalada' {
+    $root = New-TestInstall 'upd1'
+    $app = Join-Path $root 'app'
+    Reset-TestUpdateState
+    $gh = New-TestGitHub '1.3.0' (New-TestPackage '1.3.0')
+    $r = Get-TrPendingUpdate -Root $root -Transport $gh.transport -AppRoot $app
+    Assert-True ($r -and $r.Version -eq '1.3.0' -and $r.Notes -like '*Algo nuevo*') 'no ofreció la 1.3.0'
+    Reset-TestUpdateState
+    $gh = New-TestGitHub '1.2.0' (New-TestPackage '1.2.0')
+    Assert-True ($null -eq (Get-TrPendingUpdate -Root $root -Transport $gh.transport -AppRoot $app)) 'ofreció la misma versión'
+    Reset-TestUpdateState
+    $gh = New-TestGitHub '1.3.0' (New-TestPackage '1.3.0') -Extra @{ prerelease = $true }
+    Assert-True ($null -eq (Get-TrLatestRelease -Force -Transport $gh.transport)) 'aceptó una versión de prueba'
+    $gh = New-TestGitHub '1.3.0' (New-TestPackage '1.3.0') -Extra @{ assets = @() }
+    Assert-True ($null -eq (Get-TrLatestRelease -Force -Transport $gh.transport)) 'aceptó una versión sin paquete'
+    Remove-Item -LiteralPath (Join-Path $app 'VERSION')
+    Reset-TestUpdateState
+    $gh = New-TestGitHub '1.3.0' (New-TestPackage '1.3.0')
+    Assert-True ((Get-TrPendingUpdate -Root $root -Transport $gh.transport -AppRoot $app).Version -eq '1.3.0') 'no ofreció actualizar una instalación sin VERSION'
+}
+Test-Case 'Una copia que no es la instalada no consulta' {
+    $root = New-TestInstall 'upd2'
+    Reset-TestUpdateState
+    $gh = New-TestGitHub '1.3.0' (New-TestPackage '1.3.0')
+    Assert-True ($null -eq (Get-TrPendingUpdate -Root $root -Transport $gh.transport -AppRoot (Join-Path $tmp 'otra-copia'))) 'ofreció actualizar'
+    Assert-True ($gh.calls.Count -eq 0) 'consultó GitHub'
+}
+Test-Case 'Consulta como mucho cada minCheckMinutes y sin red usa la última conocida' {
+    Reset-TestUpdateState
+    $gh = New-TestGitHub '1.3.0' (New-TestPackage '1.3.0')
+    $now = [DateTime]::new(2026, 11, 7, 12, 0, 0, [DateTimeKind]::Utc)
+    Assert-True ((Get-TrLatestRelease -Now $now -Transport $gh.transport).Version -eq '1.3.0') 'primera consulta'
+    Assert-True ((Get-TrLatestRelease -Now $now.AddMinutes(5) -Transport $gh.transport).Version -eq '1.3.0') 'segunda consulta'
+    Assert-True ($gh.calls.Count -eq 1) "consultó $($gh.calls.Count) veces"
+    $offline = { param($Method, $Url, $Headers, $Body, $Timeout) throw (New-Object Net.Http.HttpRequestException('sin red')) }
+    Assert-True ((Get-TrLatestRelease -Now $now.AddHours(1) -Transport $offline).Version -eq '1.3.0') 'sin red no devolvió la última conocida'
+}
+Test-Case 'Instala la versión nueva en <instalación>\app sin tocar las partidas' {
+    $root = New-TestInstall 'upd3'
+    New-Item -ItemType Directory -Force -Path (Join-Path $root 'games\FG') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $root 'games\FG\plyr0001.ini'), '[x]')
+    Reset-TestUpdateState
+    $gh = New-TestGitHub '1.3.0' (New-TestPackage '1.3.0' -Extra @{ 'src/Trampolin.ps1' = '# nuevo' })
+    $rel = Get-TrLatestRelease -Force -Transport $gh.transport
+    $steps = [Collections.ArrayList]::new()
+    $v = Install-TrUpdate -Release $rel -Root $root -Transport $gh.transport -OnProgress { param($p, $m) [void]$steps.Add($p) }
+    Assert-True ($v -eq '1.3.0') "devolvió $v"
+    Assert-True ((Get-TrRuntimeVersion -AppRoot (Join-Path $root 'app')) -eq [version]'1.3.0') 'no quedó la 1.3.0'
+    Assert-True ([IO.File]::ReadAllText((Join-Path $root 'app\src\Trampolin.ps1')) -eq '# nuevo') 'no se copió el programa nuevo'
+    Assert-True (Test-Path (Join-Path $root 'games\FG\plyr0001.ini')) 'se borró una partida'
+    Assert-True ($steps[$steps.Count - 1] -eq 100) 'el progreso no llegó a 100'
+}
+foreach ($bad in @(
+        @{ name = 'suma de verificación incorrecta'; pkg = { New-TestPackage '1.3.0' }; sha = ('0' * 64) },
+        @{ name = 'rutas fuera del paquete'; pkg = { New-TestPackage '1.3.0' -Extra @{ '../evil.cmd' = 'x' } }; sha = $null },
+        @{ name = 'paquete de otra versión'; pkg = { New-TestPackage '1.3.0' -Extra @{ VERSION = "1.1.0`n" } }; sha = $null },
+        @{ name = 'paquete incompleto'; pkg = { New-TestPackage '1.3.0' -Skip 'native/bin/trhook.dll' }; sha = $null })) {
+    Test-Case "Rechaza la actualización: $($bad.name)" {
+        $root = New-TestInstall ('upd-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
+        Reset-TestUpdateState
+        $gh = New-TestGitHub '1.3.0' (& $bad.pkg) $bad.sha
+        $rel = Get-TrLatestRelease -Force -Transport $gh.transport
+        Assert-Throws { Install-TrUpdate -Release $rel -Root $root -Transport $gh.transport } 'TR-UPD-002'
+        Assert-True ((Get-TrRuntimeVersion -AppRoot (Join-Path $root 'app')) -eq [version]'1.2.0') 'cambió la instalación'
+        Assert-True (-not (Test-Path (Join-Path $root 'app\src'))) 'copió archivos'
+    }
+}
+Test-Case 'Si no se puede descargar avisa con TR-UPD-001' {
+    $root = New-TestInstall 'upd4'
+    Reset-TestUpdateState
+    $gh = New-TestGitHub '1.3.0' (New-TestPackage '1.3.0')
+    $rel = Get-TrLatestRelease -Force -Transport $gh.transport
+    $gh.routes.Remove('https://x/TrampolinRuntime-1.3.0.zip')
+    Assert-Throws { Install-TrUpdate -Release $rel -Root $root -Transport $gh.transport } 'TR-UPD-001'
+}
+$env:TRAMPOLIN_UPDATE_URL = $null
 
 Write-Host 'Partidas (exportar / importar, mismo formato que Linux)'
 function New-FakeInstall {

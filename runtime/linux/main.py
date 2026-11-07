@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from trampolin import core, errors, proton, steam, sync  # noqa: E402
+from trampolin import core, errors, proton, steam, sync, update  # noqa: E402
 from trampolin.errors import TrError  # noqa: E402
 
 
@@ -57,6 +57,8 @@ def cli(argv):
     sub.add_parser('menu', help='crear los accesos del menú del Modo Escritorio')
     s = sub.add_parser('sync', help='sincronización de partidas entre equipos (se configura desde la biblioteca)')
     s.add_argument('action', choices=('status', 'now'), help='status: estado de cada juego; now: sincronizar todo ahora')
+    s = sub.add_parser('update', help='actualizar Trampolín a la última versión publicada')
+    s.add_argument('action', choices=('check', 'now'), help='check: ver si hay una versión nueva; now: instalarla')
     args = p.parse_args(argv)
 
     cfg = core.get_config()
@@ -192,6 +194,30 @@ def _cli_run(args, cfg):
             else:
                 print('  ✓ ' + r.message + (' (la otra quedó en %s)' % r.conflict if r.conflict else ''))
         return rc
+    if args.cmd == 'update':
+        current = update.version_of(os.path.join(root, 'app'))
+        print('Instalada: %s' % (update.format_version(current) if current else 'desconocida'))
+        release = update.check(force=True)
+        if release is None:
+            print('No se encontró ninguna versión publicada (o no hay conexión).')
+            return 1
+        newer = current is None or update.parse_version(release.version) > current
+        print('Publicada: %s%s' % (release.version, '' if newer else ' (ya está al día)'))
+        if args.action == 'check' or not newer:
+            return 0
+        if core.running_game(root):
+            print('Hay un juego abierto: cerralo antes de actualizar.')
+            return 1
+        shown = set()
+
+        def progress(p, text=''):
+            line = text.split('…')[0]          # una línea por paso, sin repetir el avance de la descarga
+            if text and line not in shown:
+                shown.add(line)
+                print('  ' + text)
+        update.install(release, root, progress)
+        print('Listo: Trampolín %s instalado en %s' % (release.version, os.path.join(root, 'app')))
+        return 0
     if args.cmd == 'menu':
         steam.write_desktop_entries(root)
         print('Accesos creados en %s' % steam.desktop_dir())

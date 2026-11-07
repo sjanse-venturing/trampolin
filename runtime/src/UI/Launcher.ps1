@@ -38,6 +38,64 @@ function Invoke-TrRuntimeUpdateUI {
     }
 }
 
+function ConvertTo-TrNotesText {
+    <# Las novedades (Markdown del CHANGELOG) en texto simple para mostrar. #>
+    param([string]$Notes)
+    $lines = foreach ($line in ("$Notes" -replace "`r`n", "`n").Split("`n")) {
+        $line = ($line -replace '^#+\s*', '').Replace('**', '').Replace('`', '')
+        ($line -replace '^(\s*)[-*]\s+', '$1• ').TrimEnd()
+    }
+    $text = ($lines -join "`r`n").Trim()
+    $(if ($text) { $text } else { 'Correcciones y mejoras.' })
+}
+
+function Show-TrUpdatePrompt {
+    param([Parameter(Mandatory)]$Release, $Current, $Owner = $null)
+    $was = $(if ($Current) { "la $($Current.ToString(3))" } else { 'una anterior' })
+    $f = New-TrForm -Title 'Trampolín' -Width 600 -Height 440
+    $t = New-TrLabel -Text 'Hay una versión nueva de Trampolín' -X 20 -Y 18 -Width 560 -Font $global:TrTheme.FontBig
+    $m = New-TrLabel -Text ("Está disponible la versión $($Release.Version) (tenés $was). Actualizar tarda unos segundos; " +
+        'los juegos y las partidas no se tocan.') -X 20 -Y 52 -Width 560 -Height 44
+    $h = New-TrLabel -Text 'Novedades' -X 20 -Y 102 -Width 560 -Font $global:TrTheme.FontBold
+    $notes = New-Object System.Windows.Forms.TextBox
+    $notes.Multiline = $true; $notes.ReadOnly = $true; $notes.ScrollBars = 'Vertical'; $notes.BackColor = [System.Drawing.Color]::White
+    $notes.Location = New-Object System.Drawing.Point(20, 126); $notes.Size = New-Object System.Drawing.Size(560, 220)
+    $notes.Text = ConvertTo-TrNotesText $Release.Notes
+    $by = New-TrButton -Text 'Actualizar' -Width 140 -Primary; $by.Location = New-Object System.Drawing.Point(440, 360)
+    $bn = New-TrButton -Text 'Ahora no' -Width 140; $bn.Location = New-Object System.Drawing.Point(290, 360)
+    $by.DialogResult = 'Yes'; $bn.DialogResult = 'No'
+    $f.Controls.AddRange(@($t, $m, $h, $notes, $by, $bn)); $f.AcceptButton = $by; $f.CancelButton = $bn
+    $f.Add_Shown({ $by.Focus() }.GetNewClosure())
+    $r = $f.ShowDialog($Owner); $f.Dispose()
+    $r -eq 'Yes'
+}
+
+function Invoke-TrReleaseUpdateUI {
+    <#
+      Al abrir la biblioteca o un juego: si hay una versión nueva publicada en GitHub, ofrece
+      instalarla. Si se instala, vuelve a abrir Trampolín (ya actualizado) con los mismos
+      argumentos y termina este proceso.
+    #>
+    param([Parameter(Mandatory)][string]$Root, [string[]]$Arguments = @(), $Owner = $null)
+    try { $release = Get-TrPendingUpdate -Root $Root }
+    catch { Write-TrLog Warn "No se pudo consultar si hay actualizaciones: $_"; return }     # nunca impide jugar
+    if (-not $release -or (Get-TrRunningGame -Root $Root)) { return }
+    if (-not (Show-TrUpdatePrompt -Release $release -Current (Get-TrRuntimeVersion) -Owner $Owner)) {
+        Write-TrLog Info "Hay una actualización ($($release.Version)): el usuario eligió «Ahora no»"
+        return
+    }
+    $sync = Invoke-TrWithProgress -Title "Actualizando Trampolín a la versión $($release.Version)…" -Owner $Owner -Arguments @{ release = $release; root = $Root } -Script {
+        param($sync, $a)
+        Install-TrUpdate -Release $a.release -Root $a.root -Cancel $sync -OnProgress { param($p, $m) $sync.Percent = $p; $sync.Message = $m }
+    }
+    if ($sync.Error) { [void](Show-TrError $sync.Error $Owner); return }
+    Show-TrInfo -Title 'Trampolín actualizado' -Message "Ya tenés la versión $($release.Version). Trampolín se vuelve a abrir." -Owner $Owner
+    $entry = Join-Path $Root 'app\src\Trampolin.ps1'
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden', '-File', ('"{0}"' -f $entry)) + $Arguments
+    Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $argList
+    exit 0
+}
+
 function Show-TrLauncher {
     param([Parameter(Mandatory)]$Config)
 

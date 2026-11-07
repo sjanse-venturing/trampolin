@@ -3,12 +3,15 @@
 # Con TRAMPOLIN_ISOS=<carpeta con las .iso> se prueban también las imágenes reales.
 
 import base64
+import datetime
 import hashlib
 import http.server
 import io
 import json
 import os
 import re
+import shutil
+import socket
 import struct
 import sys
 import tempfile
@@ -21,7 +24,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'linux'))
 
-from trampolin import art, core, errors, proton, steam, sync  # noqa: E402
+from trampolin import art, core, errors, proton, steam, sync, update  # noqa: E402
 from trampolin.errors import TrError  # noqa: E402
 from trampolin.iso import Iso  # noqa: E402
 
@@ -557,6 +560,189 @@ class SyncDriveTests(SyncTestBase):
         with self.assertRaises(TrError) as c:
             d.start_link()
         self.assertEqual(c.exception.code, 'TR-SYN-008')
+
+
+class FakeGitHub(http.server.BaseHTTPRequestHandler):
+    """Imita la API de versiones de GitHub y la descarga de sus archivos."""
+    routes = {}        # ruta → (estado, bytes)
+    calls = []
+
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        FakeGitHub.calls.append(self.path)
+        status, body = FakeGitHub.routes.get(self.path, (404, b'{}'))
+        self.send_response(status)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def make_package(version, files=None, prefix=None):
+    """ZIP con la forma del de build.sh, mínimo (ver update.REQUIRED)."""
+    prefix = prefix if prefix is not None else 'TrampolinRuntime-%s/' % version
+    contents = {r: b'x' for r in update.REQUIRED}
+    contents['VERSION'] = (version + '\n').encode()
+    contents['src/data/update.json'] = b'{}'
+    contents.update(files or {})
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w') as z:
+        for name, data in contents.items():
+            z.writestr(name if name.startswith('/') or '..' in name else prefix + name, data)
+    return buf.getvalue()
+
+
+class UpdateTests(unittest.TestCase):
+    def setUp(self):
+        self.t = tempfile.mkdtemp()
+        self.root = os.path.join(self.t, 'inst')
+        self.app = os.path.join(self.root, 'app')
+        os.makedirs(self.app)
+        with open(os.path.join(self.app, 'VERSION'), 'w') as f:
+            f.write('1.2.0\n')
+        fake_install(self.root, ['FG'])
+        FakeGitHub.routes, FakeGitHub.calls = {}, []
+        self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), FakeGitHub)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.base = 'http://127.0.0.1:%d' % self.server.server_port
+        self.patches = [mock.patch.object(update, 'STATE_FILE', os.path.join(self.t, 'update-state.json')),
+                        mock.patch.object(core, 'APP_ROOT', self.app),
+                        mock.patch.dict(os.environ, {'TRAMPOLIN_UPDATE_URL': self.base + '/latest'})]
+        for p in self.patches:
+            p.start()
+        os.environ.pop('TRAMPOLIN_NO_UPDATE', None)
+
+    def tearDown(self):
+        for p in reversed(self.patches):
+            p.stop()
+        self.server.shutdown()
+        self.server.server_close()
+        shutil.rmtree(self.t, ignore_errors=True)
+
+    def publish(self, version, package=None, sha=None, **extra):
+        package = package if package is not None else make_package(version)
+        sha = sha if sha is not None else hashlib.sha256(package).hexdigest()
+        name = 'TrampolinRuntime-%s.zip' % version
+        FakeGitHub.routes['/' + name] = (200, package)
+        FakeGitHub.routes['/' + name + '.sha256'] = (200, ('%s  %s\n' % (sha, name)).encode())
+        release = {'tag_name': 'v' + version, 'body': '### Agregado\n- Algo nuevo', 'html_url': 'https://example/r',
+                   'assets': [{'name': name, 'browser_download_url': self.base + '/' + name},
+                              {'name': name + '.sha256', 'browser_download_url': self.base + '/' + name + '.sha256'}]}
+        release.update(extra)
+        FakeGitHub.routes['/latest'] = (200, json.dumps(release).encode())
+
+    def test_versions(self):
+        self.assertEqual(update.parse_version('v1.2'), (1, 2, 0))
+        self.assertEqual(update.parse_version(' 1.10.3\n'), (1, 10, 3))
+        self.assertIsNone(update.parse_version('1.2.0-beta'))
+        self.assertGreater(update.parse_version('1.10.0'), update.parse_version('1.9.9'))
+
+    def test_offers_newer_release_only(self):
+        self.publish('1.3.0')
+        r = update.pending(self.root)
+        self.assertEqual((r.version, r.notes), ('1.3.0', '### Agregado\n- Algo nuevo'))
+        self.publish('1.2.0')
+        self.assertEqual(update.check(force=True).version, '1.2.0')
+        self.assertIsNone(update.pending(self.root))
+
+    def test_ignores_prereleases_and_releases_without_package(self):
+        self.publish('1.3.0', prerelease=True)
+        self.assertIsNone(update.check(force=True))
+        self.publish('1.3.0', assets=[])
+        self.assertIsNone(update.check(force=True))
+        FakeGitHub.routes['/latest'] = (404, b'{"message": "Not Found"}')
+        self.assertIsNone(update.check(force=True))
+
+    def test_only_the_installed_copy_checks(self):
+        self.publish('1.3.0')
+        with mock.patch.object(core, 'APP_ROOT', os.path.join(self.t, 'otra-copia')):
+            self.assertIsNone(update.pending(self.root))
+        self.assertEqual(FakeGitHub.calls, [])
+
+    def test_checks_at_most_every_few_minutes_and_survives_offline(self):
+        self.publish('1.3.0')
+        now = datetime.datetime(2026, 11, 7, 12, 0, tzinfo=datetime.timezone.utc)
+        self.assertEqual(update.check(now=now).version, '1.3.0')
+        self.assertEqual(update.check(now=now + datetime.timedelta(minutes=5)).version, '1.3.0')
+        self.assertEqual(len(FakeGitHub.calls), 1)
+        with socket.socket() as closed:
+            closed.bind(('127.0.0.1', 0))
+            port = closed.getsockname()[1]
+        with mock.patch.dict(os.environ, {'TRAMPOLIN_UPDATE_URL': 'http://127.0.0.1:%d/latest' % port}):
+            later = now + datetime.timedelta(hours=1)
+            self.assertEqual(update.check(now=later).version, '1.3.0')     # sin red: la última conocida
+
+    def test_unknown_installed_version_is_offered_the_update(self):
+        os.remove(os.path.join(self.app, 'VERSION'))      # instalaciones de Linux anteriores a la 1.3.0
+        self.publish('1.3.0')
+        self.assertEqual(update.pending(self.root).version, '1.3.0')
+
+    def test_install_replaces_the_program_but_not_games_or_saves(self):
+        self.publish('1.3.0', make_package('1.3.0', {'linux/main.py': b'# nuevo'}))
+        save = os.path.join(self.root, 'games', 'FG', 'plyr0001.ini')
+        with open(save, 'w') as f:
+            f.write('[x]')
+        steps = []
+        self.assertEqual(update.install(update.check(force=True), self.root, lambda p, t='': steps.append(p)), '1.3.0')
+        self.assertEqual(update.version_of(self.app), (1, 3, 0))
+        with open(os.path.join(self.app, 'linux', 'main.py'), 'rb') as f:
+            self.assertEqual(f.read(), b'# nuevo')
+        self.assertTrue(os.access(os.path.join(self.app, 'trampolin.sh'), os.X_OK))
+        self.assertTrue(os.path.exists(save))
+        self.assertEqual(steps[-1], 100)
+
+    def assert_rejected(self, package, sha=None):
+        self.publish('1.3.0', package, sha)
+        with self.assertRaises(TrError) as cm:
+            update.install(update.check(force=True), self.root)
+        self.assertEqual(cm.exception.code, 'TR-UPD-002')
+        self.assertEqual(update.version_of(self.app), (1, 2, 0))
+        self.assertFalse(os.path.exists(os.path.join(self.app, 'linux')))
+
+    def test_rejects_wrong_checksum(self):
+        self.assert_rejected(make_package('1.3.0'), sha='0' * 64)
+
+    def test_rejects_paths_outside_the_package(self):
+        self.assert_rejected(make_package('1.3.0', {'../../evil.sh': b'x'}))
+
+    def test_rejects_package_of_another_version(self):
+        self.assert_rejected(make_package('1.3.0', {'VERSION': b'1.1.0\n'}))
+
+    def test_rejects_incomplete_package(self):
+        p = make_package('1.3.0')
+        buf = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(p)) as src, zipfile.ZipFile(buf, 'w') as z:
+            for i in src.infolist():
+                if not i.filename.endswith('trhook.dll'):
+                    z.writestr(i, src.read(i))
+        self.assert_rejected(buf.getvalue())
+
+    def test_download_failure_is_reported(self):
+        self.publish('1.3.0')
+        release = update.check(force=True)
+        FakeGitHub.routes.pop('/TrampolinRuntime-1.3.0.zip')
+        with self.assertRaises(TrError) as cm:
+            update.install(release, self.root)
+        self.assertEqual(cm.exception.code, 'TR-UPD-001')
+
+    def test_cli_installs_from_the_latest_release(self):
+        """El paquete real (build.sh) pasa la validación y se instala con el lanzador."""
+        import subprocess
+        here = os.path.dirname(HERE)
+        out = os.path.join(self.t, 'dist')
+        version = '9.9.9'
+        r = subprocess.run(['sh', os.path.join(here, 'build.sh'), '--skip-tests', '--version', version, '--out', out],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        zpath = os.path.join(out, 'TrampolinRuntime-%s.zip' % version)
+        with open(zpath, 'rb') as f:
+            data = f.read()
+        with zipfile.ZipFile(io.BytesIO(data)) as z:   # build.sh pone la versión de --version en el VERSION del paquete
+            self.assertEqual(z.read('TrampolinRuntime-%s/VERSION' % version).decode().strip(), version)
+        self.publish(version, data)
+        self.assertEqual(update.install(update.check(force=True), self.root), version)
+        self.assertTrue(os.path.exists(os.path.join(self.app, 'linux', 'trampolin', 'update.py')))
 
 
 class SteamTests(unittest.TestCase):

@@ -463,26 +463,29 @@ def copy_size(iso_path, sources=()):
 # Instalación del runtime y de los juegos
 # ---------------------------------------------------------------------------
 
-def install_runtime_files(root):
-    """Copia el programa a <root>/app para que la instalación no dependa de la carpeta de descarga."""
+def install_runtime_files(root, source=None):
+    """Copia el programa a <root>/app para que la instalación no dependa de la carpeta de descarga.
+    source: carpeta de la copia a instalar (por defecto, esta; las actualizaciones pasan la descargada)."""
+    src = source or APP_ROOT
     app = os.path.join(root, 'app')
-    if os.path.realpath(APP_ROOT) == os.path.realpath(app):
+    if os.path.realpath(src) == os.path.realpath(app):
         return app
     ignore = shutil.ignore_patterns('__pycache__', '*.pyc')
     for sub in ('src', 'linux'):
-        shutil.copytree(os.path.join(APP_ROOT, sub), os.path.join(app, sub), dirs_exist_ok=True, ignore=ignore)
+        shutil.copytree(os.path.join(src, sub), os.path.join(app, sub), dirs_exist_ok=True, ignore=ignore)
     os.makedirs(os.path.join(app, 'native', 'bin'), exist_ok=True)
+    bin_src = native_bin() if source is None else os.path.join(src, 'native', 'bin')
     for f in ('trlaunch.exe', 'trhook.dll', 'WING32.DLL'):
-        shutil.copy2(os.path.join(native_bin(), f), os.path.join(app, 'native', 'bin', f))
-    for f in ('trampolin.sh', 'Trampolin.cmd'):
-        p = os.path.join(APP_ROOT, f)
+        shutil.copy2(os.path.join(bin_src, f), os.path.join(app, 'native', 'bin', f))
+    for f in ('trampolin.sh', 'Trampolin.cmd', 'VERSION'):
+        p = os.path.join(src, f)
         if os.path.exists(p):
             shutil.copy2(p, os.path.join(app, f))
     sh = os.path.join(app, 'trampolin.sh')
     if os.path.exists(sh):
         os.chmod(sh, 0o755)
     # Documento de usuario: LEEME.txt en un paquete, README.md de la raíz del repositorio en desarrollo.
-    doc = next((p for p in (os.path.join(APP_ROOT, 'LEEME.txt'), os.path.join(os.path.dirname(APP_ROOT), 'README.md'))
+    doc = next((p for p in (os.path.join(src, 'LEEME.txt'), os.path.join(os.path.dirname(src), 'README.md'))
                 if os.path.exists(p)), None)
     for d in (app, root):
         if doc:

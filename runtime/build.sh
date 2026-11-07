@@ -1,11 +1,12 @@
 #!/bin/sh
 # Empaqueta Trampolín Runtime desde Linux / Steam Deck (equivalente a build.ps1).
 #
-# Uso:  runtime/build.sh [--native] [--skip-tests] [--version X.Y.Z]
+# Uso:  runtime/build.sh [--native] [--skip-tests] [--version X.Y.Z] [--out <carpeta>]
 #
 #   --native      recompila los componentes nativos con native/build.sh (Zig); si no, usa native/bin
 #   --skip-tests  no ejecuta las pruebas de Python
-#   --version     versión del paquete (por defecto, la del archivo VERSION)
+#   --version     versión del paquete (por defecto, la del archivo VERSION); va también en su VERSION
+#   --out         carpeta de destino (por defecto, runtime/dist)
 #
 # Genera dist/TrampolinRuntime-<versión>.zip, el mismo paquete que build.ps1
 # (rutas con / y permisos de Unix: trampolin.sh queda ejecutable al descomprimir en Linux).
@@ -14,11 +15,13 @@ here=$(cd "$(dirname "$0")" && pwd)
 version=$(tr -d '[:space:]' < "$here/VERSION")
 native=0
 tests=1
+out="$here/dist"
 while [ $# -gt 0 ]; do
   case "$1" in
     --native) native=1 ;;
     --skip-tests) tests=0 ;;
     --version) version=$2; shift ;;
+    --out) out=$2; shift ;;
     *) echo "Opción desconocida: $1" >&2; exit 2 ;;
   esac
   shift
@@ -39,11 +42,10 @@ if [ $tests = 1 ]; then
 fi
 
 step 'Armando el paquete'
-python3 -I - "$here" "$version" <<'PY'
+python3 -I - "$here" "$version" "$out" <<'PY'
 import os, sys, zipfile
-here, version = sys.argv[1], sys.argv[2]
+here, version, dist = sys.argv[1], sys.argv[2], sys.argv[3]
 name = 'TrampolinRuntime-%s' % version
-dist = os.path.join(here, 'dist')
 os.makedirs(dist, exist_ok=True)
 out = os.path.join(dist, name + '.zip')
 # El documento de usuario es README.md en la raíz del repositorio; en el paquete va como LEEME.txt.
@@ -62,6 +64,9 @@ with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
             info.external_attr = (0o100755 if f.endswith('.sh') else 0o100644) << 16
             info.compress_type = zipfile.ZIP_DEFLATED
             with open(f, 'rb') as fh:
-                z.writestr(info, fh.read())
+                data = fh.read()
+            if item == 'VERSION':
+                data = (version + '\n').encode()                    # la del paquete, aunque se pase --version
+            z.writestr(info, data)
 print('Listo: %s (%.1f MB)' % (out, os.path.getsize(out) / 1e6))
 PY

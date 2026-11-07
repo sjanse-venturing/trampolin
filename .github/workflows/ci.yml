@@ -1,0 +1,74 @@
+# Pruebas en cada push y publicación de versiones (sin costo: repositorio público).
+#
+#   push a main / pull request:  pruebas de Linux (Python) y de Windows (Windows PowerShell 5.1)
+#   etiqueta vX.Y.Z:             las mismas pruebas y, si pasan, la release en GitHub con el ZIP,
+#                                su .sha256 y las novedades de CHANGELOG.md. Las instalaciones la
+#                                ofrecen solas (ver RUNTIME.md §18).
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pruebas (Python)
+        run: python3 -I -m unittest discover -s runtime/tests -p 'test_*.py' -v
+
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pruebas (Windows PowerShell 5.1)
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\tests\Run-Tests.ps1
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test-linux, test-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verificar versión y novedades
+        id: meta
+        run: |
+          version=$(tr -d '[:space:]' < runtime/VERSION)
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::La etiqueta $GITHUB_REF_NAME no coincide con runtime/VERSION ($version)"
+            exit 1
+          fi
+          python3 -I - "$version" > notes.md <<'PY'
+          import re, sys
+          v = sys.argv[1]
+          text = open('CHANGELOG.md', encoding='utf-8').read()
+          m = re.search(r'^## \[%s\][^\n]*\n(.*?)(?=^## \[|\Z)' % re.escape(v), text, re.S | re.M)
+          if not m or not m.group(1).strip():
+              sys.exit('CHANGELOG.md no tiene la sección ## [%s]' % v)
+          print(m.group(1).strip())
+          PY
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Armar el paquete
+        run: sh runtime/build.sh --skip-tests --out dist
+      - name: Suma de verificación
+        working-directory: dist
+        run: sha256sum "TrampolinRuntime-${{ steps.meta.outputs.version }}.zip" > "TrampolinRuntime-${{ steps.meta.outputs.version }}.zip.sha256"
+      - name: Publicar la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          # Primero como borrador y después se publica: así nunca hay una release «última» sin sus archivos.
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "Trampolín Runtime $VERSION" --notes-file notes.md \
+            "dist/TrampolinRuntime-$VERSION.zip" "dist/TrampolinRuntime-$VERSION.zip.sha256"
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest

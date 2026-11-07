@@ -11,7 +11,7 @@
   El mismo ZIP sirve para Windows (Trampolin.cmd) y para Linux / Steam Deck
   (trampolin.sh + linux\): las rutas usan '/' y las entradas llevan permisos de
   Unix (trampolin.sh ejecutable). Desde Linux, build.sh arma el mismo paquete.
-  La versión por defecto sale del archivo VERSION.
+  La versión por defecto sale del archivo VERSION; con -Version, esa va también en el VERSION del paquete.
 #>
 param([switch]$SkipNative, [switch]$SkipTests, [string]$IsoFolder, [string]$Version)
 
@@ -81,6 +81,9 @@ foreach ($f in $files) {
     New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
     Copy-Item $f.File.FullName $dst
 }
+# La versión del paquete va en su VERSION aunque se pase -Version (las actualizaciones la verifican).
+$versionFile = Join-Path $stage 'VERSION'
+[IO.File]::WriteAllText($versionFile, "$Version`n", (New-Object Text.UTF8Encoding($false)))
 
 # El "version made by" del directorio central queda en Unix (3) para que unzip, bsdtar,
 # Ark, etc. respeten los permisos; Windows ignora ese byte.
@@ -107,7 +110,8 @@ Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 $archive = [IO.Compression.ZipFile]::Open($zip, 'Create')
 try {
     foreach ($f in $files) {
-        $entry = [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $f.File.FullName, "$name/$($f.Rel)", 'Optimal')
+        $source = $(if ($f.Rel -eq 'VERSION') { $versionFile } else { $f.File.FullName })
+        $entry = [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $source, "$name/$($f.Rel)", 'Optimal')
         $mode = if ($f.Rel.EndsWith('.sh')) { 0x81ED } else { 0x81A4 }   # 0100755 / 0100644
         $entry.ExternalAttributes = $mode -shl 16
     }

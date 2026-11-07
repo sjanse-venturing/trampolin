@@ -1025,6 +1025,7 @@ runtime/
 ./trampolin.sh cli import-saves <zip>
 ./trampolin.sh cli steam [--no-restart] | menu
 ./trampolin.sh cli sync status | now                            # §16 (se configura desde la biblioteca)
+./trampolin.sh cli update check | now                           # §18
 ```
 
 ### 15.6 Formato de las copias de partidas (Windows y Linux)
@@ -1191,3 +1192,32 @@ Los CD traen muy poco material gráfico suelto: solo 5° y 6° Curso tienen la c
 - **Cuándo:** «Agregar a Steam» genera las imágenes **antes** de cerrar Steam (en Python tarda unos segundos por juego) y las copia a `config\grid` de cada usuario junto con los accesos; también `Update-TrSteamShortcuts` al instalar o desinstalar. El artwork no requiere cerrar Steam. Se regenera solo si el `.exe` o la imagen son más nuevos que `hero.png`.
 - **Verificado:** las pruebas generan el artwork con imágenes sintéticas en Windows y en Linux (medidas, marco, color, logo transparente, copia a `grid` con el `appid` sin signo) y leen la imagen de cada uno de los 5 discos reales; las imágenes de los 8 juegos salen iguales a la vista en las dos plataformas.
 - **Falta validar a mano:** cómo se ven en la biblioteca de Steam y en el Modo Juego del Steam Deck.
+
+---
+
+## 18. Actualizaciones automáticas (GitHub Releases)
+
+> 1.3.0. `src/Core/Trampolin.Update.psm1` (Windows) y `linux/trampolin/update.py` (Linux), con las mismas reglas en `src/data/update.json`.
+
+- **Dónde se publican:** en las *Releases* del repositorio público. Cada versión tiene el ZIP de siempre (`TrampolinRuntime-<versión>.zip`) y su suma `TrampolinRuntime-<versión>.zip.sha256`; las novedades de la versión (su sección de `CHANGELOG.md`) son el texto de la *release*. Lo hace solo `.github/workflows/ci.yml` (ver «Publicar una versión»).
+- **Quién se actualiza:** solo la copia instalada (`<instalación>\app`, la que abren los accesos directos, el menú y Steam). Una copia descomprimida o el repositorio no consultan nada; para esas sigue el aviso de «copia más nueva» de la 1.1 (`Register-TrRuntimeCopy` / `Invoke-TrRuntimeUpdateUI`).
+- **Cuándo:** al abrir la biblioteca y al abrir un juego (`--play`, desde Steam o un acceso directo), antes de sincronizar las partidas. No se ofrece si hay un juego abierto.
+- **Consulta:** `GET https://api.github.com/repos/<repo>/releases/latest` (sin autenticación: 60 consultas por hora por IP; GitHub no incluye borradores ni *pre-releases*). Tiempo máximo 5 s; el resultado se anota en `update-state.json` (carpeta de configuración) y no se vuelve a consultar antes de `minCheckMinutes` (15), así que abrir la biblioteca y después un juego hace una sola consulta. Sin red se usa la última respuesta conocida y nunca se impide jugar. Una instalación sin `VERSION` (las de Linux anteriores a la 1.3.0 no lo copiaban) se considera más vieja que cualquier versión publicada.
+- **Diálogo:** «Hay una versión nueva de Trampolín», con la versión instalada y la nueva, y las novedades (el Markdown de la *release* pasado a texto simple). **Actualizar** / **Ahora no**; «Ahora no» no se recuerda: se vuelve a ofrecer la próxima vez.
+- **Instalación:**
+  1. Descarga la suma y el ZIP (como mucho `maxZipBytes`, 50 MB) a una carpeta temporal.
+  2. Verifica el SHA-256 y el paquete: todo dentro de `TrampolinRuntime-<versión>/`, sin `..`, `\`, `:` ni enlaces simbólicos, con los archivos imprescindibles (`update.REQUIRED`) y con `VERSION` igual a la versión publicada. Si algo falla: `TR-UPD-002` y no se toca nada.
+  3. Copia el programa a `<instalación>\app` con `Install-TrRuntimeFiles -Source` / `install_runtime_files(root, source)` (lo mismo que al instalar; los juegos, las partidas y la configuración no se tocan).
+  4. Vuelve a abrir Trampolín desde `<instalación>\app` con los mismos argumentos (Windows: `Start-Process` + `exit`; Linux: `os.execv`), así un `--play <ID>` sigue con el juego ya en la versión nueva.
+- **Errores:** `TR-UPD-001` (no se pudo descargar), `TR-UPD-002` (paquete dañado o que no coincide), `TR-UPD-003` (no se pudo copiar; puede quedar a medias: se arregla con otra actualización o descomprimiendo el ZIP). En todos los casos se sigue con la versión instalada.
+- **Variables:** `TRAMPOLIN_NO_UPDATE=1` desactiva la consulta; `TRAMPOLIN_UPDATE_URL` reemplaza la dirección de la API (pruebas).
+- **Pruebas:** `Run-Tests.ps1` (con un transporte falso) y `test_linux.py` (con un `http.server` local) prueban: comparación de versiones, que solo se ofrezcan versiones más nuevas y con paquete, que una copia no instalada no consulte, el intervalo entre consultas y el uso sin red, la instalación sin tocar las partidas, y el rechazo por suma incorrecta, rutas fuera del paquete, otra versión o archivos faltantes. `test_linux.py` además arma el paquete real con `build.sh` y lo instala.
+
+### Publicar una versión
+
+1. Actualizar `runtime/VERSION` (por ejemplo, `1.3.1`) y agregar al principio de `CHANGELOG.md` una sección `## [1.3.1] - AAAA-MM-DD` con las novedades, escritas para el usuario (es lo que ve en el diálogo de actualización).
+2. Commit y push a `main`. El workflow corre las pruebas de Linux y de Windows (Windows PowerShell 5.1) en cada push.
+3. Crear y subir la etiqueta: `git tag v1.3.1 && git push origin v1.3.1`.
+4. El workflow vuelve a correr las pruebas, verifica que la etiqueta coincida con `VERSION` y que `CHANGELOG.md` tenga la sección, arma el ZIP con `build.sh`, calcula el `.sha256` y crea la *release* con las dos cosas y las novedades. Desde ese momento las instalaciones la ofrecen (como mucho 15 minutos después en un equipo que ya consultó).
+
+Las Actions y las Releases no tienen costo en un repositorio público. Para retirar una versión con problemas, publicar enseguida otra más nueva (las instalaciones solo se actualizan hacia adelante); borrar la *release* hace que la anterior vuelva a ser la última, pero no deshace las actualizaciones ya instaladas.

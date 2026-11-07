@@ -119,6 +119,7 @@ function Start-TrBackground {
             Import-Module (Join-Path $core 'Trampolin.Core.psm1')
             Import-Module (Join-Path $core 'Trampolin.Sync.psm1')
             Import-Module (Join-Path $core 'Trampolin.Steam.psm1')
+            Import-Module (Join-Path $core 'Trampolin.Update.psm1')
             Import-TrStrings $strings
             if ($logFile) { Initialize-TrLog (Split-Path -Parent $logFile) }
             $sync.Result = & ([scriptblock]::Create($body)) $sync $arguments

@@ -34,6 +34,9 @@
     "TR-STM-001": { "title": "No encontramos Steam", "message": "No encontramos Steam en este equipo, o todavía no iniciaste sesión. Instalalo, iniciá sesión una vez y volvé a intentar.", "actions": [ "close" ] },
     "TR-STM-002": { "title": "Steam no se cerró", "message": "Para agregar los juegos hay que cerrar Steam, y no se cerró a tiempo. Cerralo a mano (menú Steam → Salir) y volvé a intentar.", "actions": [ "retry", "details" ] },
     "TR-STM-003": { "title": "No se pudieron agregar los juegos a Steam", "message": "No pudimos escribir la lista de juegos de Steam ({file}). La lista anterior quedó intacta. Causa: {detail}", "actions": [ "retry", "details" ] },
+    "TR-UPD-001": { "title": "No se pudo descargar la actualización", "message": "No pudimos descargar Trampolín {version}. Revisá que el equipo tenga Internet; se va a volver a ofrecer la próxima vez. Seguís con la versión que tenías. Causa: {detail}", "actions": [ "details" ] },
+    "TR-UPD-002": { "title": "La actualización llegó dañada", "message": "El archivo de Trampolín {version} no pasó la verificación ({reason}), así que no se instaló. Seguís con la versión que tenías.", "actions": [ "details" ] },
+    "TR-UPD-003": { "title": "No se pudo instalar la actualización", "message": "No pudimos copiar Trampolín {version} en «{path}». Si la actualización quedó a medias, usá de nuevo «Actualizar» o volvé a descomprimir el programa. Causa: {detail}", "actions": [ "details" ] },
     "TR-GEN-001": { "title": "Ocurrió un error inesperado", "message": "Ocurrió un error inesperado. No es tu culpa: copiá el informe y envialo a quien te ayude con la computadora.", "actions": [ "copy", "details" ] }
   },
   "actions": {

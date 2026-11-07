@@ -4,6 +4,7 @@
 
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -12,7 +13,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, ttk
 
-from . import core, errors, proton, steam, sync
+from . import core, errors, proton, steam, sync, update
 from .errors import TrError, Cancelled
 
 PRIMARY = '#E64832'      # rojo Trampolín
@@ -1375,6 +1376,67 @@ def start_with_progress(owner, theme, gid, root, cfg):
 
 
 # ---------------------------------------------------------------------------
+# Actualizaciones
+# ---------------------------------------------------------------------------
+
+def release_notes_text(notes):
+    """Las novedades (Markdown del CHANGELOG) en texto simple para mostrar."""
+    lines = []
+    for line in (notes or '').replace('\r\n', '\n').split('\n'):
+        line = re.sub(r'^#+\s*', '', line).replace('**', '').replace('`', '')
+        line = re.sub(r'^(\s*)[-*]\s+', r'\1• ', line)
+        lines.append(line.rstrip())
+    return '\n'.join(lines).strip() or 'Correcciones y mejoras.'
+
+
+def ask_update(owner, theme, release, current):
+    d = Dialog(owner, theme, 680, 460)
+    d.result = False
+    was = 'la %s' % update.format_version(current) if current else 'una anterior'
+    label(d, 'Hay una versión nueva de Trampolín', font=theme.big, wrap=630).pack(anchor='w', padx=22, pady=(20, 6))
+    label(d, 'Está disponible la versión %s (tenés %s). Actualizar tarda unos segundos; los juegos y las partidas '
+             'no se tocan.' % (release.version, was), wrap=630).pack(anchor='w', padx=22)
+    label(d, 'Novedades', font=theme.bold).pack(anchor='w', padx=22, pady=(12, 4))
+    b = tk.Frame(d, bg=BACK)
+    b.pack(side='bottom', fill='x', padx=22, pady=16)
+    ttk.Button(b, text='Actualizar', style='Primary.TButton', command=lambda: d.close(True)).pack(side='right')
+    ttk.Button(b, text='Ahora no', command=lambda: d.close(False)).pack(side='right', padx=8)
+    t = tk.Text(d, height=10, relief='solid', borderwidth=1, wrap='word', bg=CARD, padx=10, pady=8)
+    t.insert('1.0', release_notes_text(release.notes))
+    t.configure(state='disabled')
+    t.pack(fill='both', expand=True, padx=22)
+    d.bind('<Return>', lambda e: d.close(True))
+    return d.run()
+
+
+def offer_update(owner, theme, cfg, argv):
+    """Al abrir la biblioteca o un juego: si hay una versión nueva publicada, ofrece instalarla. Si se
+    instala, vuelve a abrir Trampolín (ya actualizado) con los mismos argumentos y no vuelve."""
+    root = cfg.get('installRoot')
+    try:
+        release = update.pending(root)
+    except Exception as e:      # una falla al consultar nunca impide jugar
+        errors.log('Warn', 'No se pudo consultar si hay actualizaciones: %s' % e)
+        return
+    if release is None or core.running_game(root):
+        return
+    current = update.version_of(core.APP_ROOT)
+    if not ask_update(owner, theme, release, current):
+        errors.log('Info', 'Hay una actualización (%s): el usuario eligió «Ahora no»' % release.version)
+        return
+    _, err = run_with_progress(owner, theme, 'Actualizando Trampolín a la versión %s…' % release.version,
+                               lambda p, c: update.install(release, root, p, c), cancellable=True)
+    if isinstance(err, Cancelled):
+        return
+    if err:
+        show_error(owner, theme, err)
+        return
+    show_info(owner, theme, 'Trampolín actualizado', 'Ya tenés la versión %s. Trampolín se vuelve a abrir.' % release.version)
+    owner.destroy()
+    update.relaunch(root, argv)
+
+
+# ---------------------------------------------------------------------------
 # Puntos de entrada
 # ---------------------------------------------------------------------------
 
@@ -1389,6 +1451,9 @@ def main(mode='auto'):
     root, theme = _tk_root()
     root.withdraw()
     open_wizard = mode == 'install'
+    cfg = core.get_config()
+    if core.installed_games(cfg.get('installRoot')):
+        offer_update(root, theme, cfg, ['--install'] if open_wizard else [])
     while True:
         cfg = core.get_config()
         has_games = bool(core.installed_games(cfg.get('installRoot')))
@@ -1419,6 +1484,7 @@ def play(gid):
         if core.find_game_id(gid) is None:
             raise TrError('TR-RUN-006', game=gid)
         gid = core.find_game_id(gid)
+        offer_update(tkroot, theme, cfg, ['--play', gid])
         if not sync_before_play(tkroot, theme, gid, root_dir, cfg):
             tkroot.destroy()
             return 0
