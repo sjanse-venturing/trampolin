@@ -20,17 +20,25 @@ jobs:
   test-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Pruebas (Python)
         run: python3 -I -m unittest discover -s runtime/tests -p 'test_*.py' -v
 
   test-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Pruebas (Windows PowerShell 5.1)
-        shell: cmd
-        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\tests\Run-Tests.ps1
+        shell: pwsh
+        run: |
+          # Las pruebas que fallan quedan también como anotaciones (se ven en el resumen de la ejecución).
+          $out = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File runtime\tests\Run-Tests.ps1 2>&1 | ForEach-Object { "$_" })
+          $code = $LASTEXITCODE
+          $out
+          $fails = @($out | Where-Object { $_ -match '^\s*FALLA ' })
+          foreach ($f in $fails) { "::error title=Run-Tests.ps1::$($f.Trim() -replace '%', '%25')" }
+          if ($code -ne 0 -and -not $fails.Count) { "::error title=Run-Tests.ps1::$((($out | Select-Object -Last 8) -join ' | ') -replace '%', '%25')" }
+          exit $code
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -39,7 +47,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Verificar versión y novedades
         id: meta
         run: |
