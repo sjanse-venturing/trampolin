@@ -135,6 +135,46 @@ def _relink(link, target):
     os.symlink(target, link)
 
 
+# Ajustes de Wine que el prefijo necesita: (clave, valor, dato).
+# GrabPointer=N: con la ventana a pantalla completa, Wine intenta encerrar el mouse en ella al
+# hacer clic. En el escritorio de Steam Deck (Xwayland) no puede y lo reintenta sin parar: el
+# juego no recibe el soltar del clic y queda congelado hasta Alt+Tab. Ningún juego usa ClipCursor.
+WINE_SETTINGS = [('HKCU\\Software\\Wine\\X11 Driver', 'GrabPointer', 'N')]
+
+
+def _has_wine_setting(pfx, key, name, data):
+    """¿user.reg ya tiene el valor? (secciones como [Software\\\\Wine\\\\X11 Driver] 1794075219)"""
+    section = '[' + key.split('\\', 1)[1].replace('\\', '\\\\') + ']'
+    line = '"%s"="%s"' % (name, data)
+    try:
+        with open(os.path.join(pfx, 'user.reg'), encoding='utf-8', errors='replace') as f:
+            inside = False
+            for l in f:
+                l = l.strip()
+                if l.startswith('['):
+                    inside = l.split(']', 1)[0] + ']' == section
+                elif inside and l == line:
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+def apply_wine_settings(root, tool):
+    """Escribe en el prefijo los ajustes de WINE_SETTINGS que falten (solo la primera vez)."""
+    pfx = prefix_dir(root)
+    for key, name, data in WINE_SETTINGS:
+        if _has_wine_setting(pfx, key, name, data):
+            continue
+        try:
+            r = subprocess.run([tool.script, 'run', 'reg.exe', 'add', key, '/v', name, '/d', data, '/f'],
+                               env=base_env(root, tool), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               stdin=subprocess.DEVNULL, timeout=120)
+            log('Info', 'Ajuste de Wine %s\\%s=%s (código %d)' % (key, name, data, r.returncode))
+        except (OSError, subprocess.SubprocessError) as e:
+            log('Warn', 'No se pudo aplicar el ajuste de Wine %s\\%s: %s' % (key, name, e))
+
+
 def ensure_prefix(root, tool, on_progress=None):
     """Crea el prefijo de Proton la primera vez y arma C:\\Trampolin."""
     pfx = prefix_dir(root)
@@ -151,6 +191,7 @@ def ensure_prefix(root, tool, on_progress=None):
         log('Info', 'Prefijo creado (código %d): %s' % (r.returncode, r.stdout.decode('utf-8', 'replace')[-2000:]))
         if not os.path.isfile(os.path.join(pfx, 'system.reg')):
             raise TrError('TR-ENV-004')
+    apply_wine_settings(root, tool)
     tr = os.path.join(pfx, 'drive_c', 'Trampolin')
     os.makedirs(tr, exist_ok=True)
     for sub in ('games', 'cd', 'logs'):

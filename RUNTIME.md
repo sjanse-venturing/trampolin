@@ -996,6 +996,7 @@ runtime/
 - **Solo modo copia.** Montar una ISO requiere root en SteamOS, así que siempre se copia el disco completo a `cd/<ID>` (unos 2,5 GB los 8 juegos).
 - **Rutas que ven los juegos.** Dentro del prefijo, `C:\Trampolin\{games,cd,logs}` son enlaces a la instalación. Los juegos ven siempre rutas cortas y ANSI (`C:\Trampolin\games\FG\`), así que en Linux no hay límite de largo ni de caracteres para la carpeta elegida.
 - **Unidad de CD.** Antes de cada juego `pfx/dosdevices/r:` apunta a `cd/<ID>` y se definen `TRAMPOLIN_CDDRIVE=R` y `TRAMPOLIN_CDLABEL`; `trhook` informa esa unidad como CD con la etiqueta original. No se usa `T:` porque Proton la reserva (y `S:`).
+- **Mouse.** Al preparar el prefijo se define `HKCU\Software\Wine\X11 Driver\GrabPointer=N`. Si no, en el escritorio de Steam Deck (Xwayland) Wine intenta encerrar el mouse en la ventana a pantalla completa en cada clic, no puede, lo reintenta sin parar y el juego no recibe el soltar del clic: queda congelado hasta Alt+Tab. Ningún juego usa `ClipCursor`, así que no se pierde nada.
 
 ### 15.3 Lanzamiento
 

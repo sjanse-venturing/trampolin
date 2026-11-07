@@ -907,6 +907,25 @@ class ProtonTests(unittest.TestCase):
         tools = [proton.ProtonTool(n, '/x/' + n) for n in ('Proton 8.0', 'Proton 11.0', 'Proton - Experimental')]
         self.assertEqual(sorted(tools, key=lambda t: t.rank(), reverse=True)[0].name, 'Proton 11.0')
 
+    def test_prefix_disables_pointer_grab_once(self):
+        # Sin GrabPointer=N un clic con la ventana a pantalla completa congela el juego en Xwayland.
+        with tempfile.TemporaryDirectory() as root:
+            calls = os.path.join(root, 'calls.txt')
+            script = os.path.join(root, 'tool', 'proton')
+            os.makedirs(os.path.dirname(script))
+            # Proton falso: arma el prefijo y, con «reg.exe add», escribe el valor en user.reg como Wine.
+            write(script, '#!/bin/sh\necho "$@" >> "%s"\npfx="$STEAM_COMPAT_DATA_PATH/pfx"\nmkdir -p "$pfx"\n'
+                          'touch "$pfx/system.reg"\n'
+                          '[ "$3" = add ] && printf \'[Software\\\\\\\\Wine\\\\\\\\X11 Driver] 1\\n"%%s"="%%s"\\n\' "$6" "$8" >> "$pfx/user.reg"\n'
+                          'exit 0\n' % calls)
+            os.chmod(script, 0o755)
+            tool = proton.ProtonTool('Proton 10.0', os.path.dirname(script))
+            proton.ensure_prefix(root, tool)
+            self.assertIn('"GrabPointer"="N"', read(os.path.join(proton.prefix_dir(root), 'user.reg')))
+            proton.ensure_prefix(root, tool)
+            adds = [l for l in read(calls).splitlines() if ' add ' in l]
+            self.assertEqual(adds, ['run reg.exe add HKCU\\Software\\Wine\\X11 Driver /v GrabPointer /d N /f'])
+
 
 @unittest.skipUnless(os.environ.get('TRAMPOLIN_ISOS'), 'definí TRAMPOLIN_ISOS para probar las imágenes reales')
 class IsoTests(unittest.TestCase):

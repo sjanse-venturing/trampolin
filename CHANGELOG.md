@@ -4,6 +4,12 @@ Cada versión publicada tiene acá su sección `## [versión] - fecha`. Ese text
 en el aviso de actualización y en la página de la versión en GitHub, así que conviene escribirlo para
 ellos: qué cambia al jugar, no cómo está hecho. Ver «Publicar una versión» en RUNTIME.md (§18).
 
+## [1.3.1] - 2026-11-07
+
+### Correcciones
+
+- Steam Deck y Linux: el juego ya no se congela al hacer clic (había que apretar Alt+Tab para que siguiera).
+
 ## [1.3.0] - 2026-11-07
 
 ### Novedades
