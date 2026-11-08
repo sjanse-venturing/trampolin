@@ -4,6 +4,13 @@ Cada versión publicada tiene acá su sección `## [versión] - fecha`. Ese text
 en el aviso de actualización y en la página de la versión en GitHub, así que conviene escribirlo para
 ellos: qué cambia al jugar, no cómo está hecho. Ver «Publicar una versión» en RUNTIME.md (§18).
 
+## [1.3.2] - 2026-11-08
+
+### Correcciones
+
+- Educación Primaria – 2° Ciclo: el juego ya no se congela ni se cierra al terminar un desafío de «amigo por correo» (pasó con «Mensajes de la cueva»). Era un error del juego original, que ahora Trampolín corrige al abrirlo.
+- Steam Deck y Linux: si un juego se cierra por un error, ahora se muestra el aviso que corresponde (antes aparecía «Ocurrió un error inesperado») y la partida se guarda igual en la sincronización.
+
 ## [1.3.1] - 2026-11-07
 
 ### Correcciones

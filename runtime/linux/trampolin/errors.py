@@ -23,7 +23,7 @@ def strings():
 class TrError(Exception):
     """Error con código del catálogo strings.es.json. Uso: raise TrError('TR-ISO-002', file='x.iso')."""
 
-    def __init__(self, code, inner=None, **data):
+    def __init__(self, code, inner=None, /, **data):   # code posicional: los datos pueden traer 'code' (TR-RUN-004)
         super().__init__(code)
         self.code = code
         self.data = data

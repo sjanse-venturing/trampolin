@@ -144,6 +144,99 @@ static LONG WINAPI crash_filter(EXCEPTION_POINTERS *ep) {
     return g_gameFilter ? g_gameFilter(ep) : EXCEPTION_CONTINUE_SEARCH;
 }
 
+/* ------------------------------------------------------------------ */
+/* Correcciones de bugs de los juegos (parches de código en memoria)    */
+/* ------------------------------------------------------------------ */
+/*
+ * Errores de programación de los juegos originales que en 1997 quedaban
+ * ocultos. Se parchean en memoria al cargar (el exe del disco no se toca)
+ * y solo si los bytes originales coinciden exactamente: con otro exe u otra
+ * versión no se hace nada.
+ *
+ * 2G.EXE (Primaria 2° Ciclo), cola de diálogos de los personajes (la
+ * función de 0x459871-0x459C72 que lee «EndOfTalk=» de los .ATR): la cola es una
+ * CStringList en this+0x98 (cabeza en this+0x9C, cantidad en this+0xA4).
+ * Después de RemoveHead, tres caminos leen la nueva cabeza sin mirar si la
+ * cola quedó vacía (los otros cuatro sí lo miran). Si el renglón que terminó
+ * era el último, leen la dirección 0x8 y el juego se cierra. Pasó al terminar
+ * un desafío de «amigo por correo» de «Mensajes de la cueva»:
+ *   excepción 0xC0000005 en 2G.EXE+0x76295, acceso de lectura a 0x00000008.
+ * La corrección agrega esa comprobación y, con la cola vacía, hace lo mismo
+ * que el propio juego en sus caminos correctos: this+0xDC = 0 (no hay más
+ * diálogo) y sale de la función por su epílogo normal. Con la cola no vacía
+ * se ejecutan exactamente las mismas instrucciones que antes.
+ */
+typedef struct {
+    DWORD rva;                 /* dónde se pone el salto al código nuevo */
+    unsigned char orig[12];    /* bytes que tienen que estar ahí */
+    int len;                   /* cuántos de esos bytes se reemplazan (salto + NOPs) */
+    DWORD back;                /* RVA a la que vuelve si la cola tiene renglones */
+    DWORD empty;               /* RVA a la que va si está vacía (0 = camino A, ver abajo) */
+} FixSite;
+
+#define RVA_2G_EMPTY_EXIT 0x59C33   /* mov ecx,[ebp-10h]; mov [ecx+0DCh],0; jmp epílogo */
+
+static const FixSite g_fix2G[] = {
+    /* A: 0x459989 mov eax,[ecx+9Ch] / mov ecx,[ecx+4] / mov edx,[eax+8] -> reproducir el renglón siguiente */
+    { 0x59989, { 0x8B, 0x81, 0x9C, 0x00, 0x00, 0x00, 0x8B, 0x49, 0x04, 0x8B, 0x50, 0x08 }, 9, 0x59992, 0 },
+    /* B: 0x459A7A mov eax,[ecx+9Ch] / lea ecx,[ebp-14h] / add eax,8 -> CString = cabeza (el fallo visto) */
+    { 0x59A7A, { 0x8B, 0x81, 0x9C, 0x00, 0x00, 0x00, 0x8D, 0x4D, 0xEC, 0x83, 0xC0, 0x08 }, 6, 0x59A80, RVA_2G_EMPTY_EXIT },
+    /* C: 0x459BE4, igual que B en otro camino */
+    { 0x59BE4, { 0x8B, 0x81, 0x9C, 0x00, 0x00, 0x00, 0x8D, 0x4D, 0xEC, 0x83, 0xC0, 0x08 }, 6, 0x59BEA, RVA_2G_EMPTY_EXIT },
+};
+
+static unsigned char *emit_rel32(unsigned char *p, unsigned char op, const void *target) {
+    *p++ = op;
+    *(DWORD *)p = (DWORD)((const unsigned char *)target - (p + 4));
+    return p + 4;
+}
+
+static void fix_2g_talk_queue(HMODULE exe) {
+    unsigned char *base = (unsigned char *)exe;
+    const int n = sizeof g_fix2G / sizeof g_fix2G[0];
+    unsigned char *code, *p;
+    int i;
+    for (i = 0; i < n; i++)
+        if (IsBadReadPtr(base + g_fix2G[i].rva, 12) || memcmp(base + g_fix2G[i].rva, g_fix2G[i].orig, 12) != 0)
+            return;   /* no es este 2G.EXE: no se toca nada */
+    code = (unsigned char *)VirtualAlloc(NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!code) {
+        tlog("Corrección de 2G (cola de diálogos): no se pudo reservar memoria");
+        return;
+    }
+    p = code;
+    for (i = 0; i < n; i++) {
+        const FixSite *s = &g_fix2G[i];
+        unsigned char *site = base + s->rva, *stub = p;
+        DWORD old;
+        int k;
+        *p++ = 0x8B; *p++ = 0x81; *(DWORD *)p = 0x9C; p += 4;          /* mov eax,[ecx+9Ch] */
+        *p++ = 0x85; *p++ = 0xC0;                                       /* test eax,eax */
+        if (s->empty) {
+            *p++ = 0x0F; p = emit_rel32(p, 0x84, base + s->empty);      /* jz <salida del juego> */
+            p = emit_rel32(p, 0xE9, base + s->back);                    /* jmp <instrucción siguiente> */
+        } else {
+            /* Camino A: con la cola vacía no hay renglón que reproducir; se marca el
+               fin del diálogo y se sigue en 0x45999B (borra this+0xD4 y sale). */
+            *p++ = 0x74; *p++ = 3 + 5;                                  /* jz vacia */
+            *p++ = 0x8B; *p++ = 0x49; *p++ = 0x04;                      /* mov ecx,[ecx+4] */
+            p = emit_rel32(p, 0xE9, base + s->back);                    /* jmp 0x459992 */
+            *p++ = 0xC7; *p++ = 0x81; *(DWORD *)p = 0xDC; p += 4;      /* vacia: mov dword [ecx+0DCh],0 */
+            *(DWORD *)p = 0; p += 4;
+            p = emit_rel32(p, 0xE9, base + 0x5999B);                    /* jmp 0x45999B */
+        }
+        if (!VirtualProtect(site, s->len, PAGE_EXECUTE_READWRITE, &old)) {
+            tlog("Corrección de 2G (cola de diálogos): no se pudo escribir en 0x%08lX", (DWORD)(ULONG_PTR)site);
+            return;   /* los sitios ya parcheados quedan bien: cada uno es independiente */
+        }
+        emit_rel32(site, 0xE9, stub);
+        for (k = 5; k < s->len; k++) site[k] = 0x90;
+        VirtualProtect(site, s->len, old, &old);
+    }
+    FlushInstructionCache(GetCurrentProcess(), base, 0x60000);
+    tlog("Corrección de 2G aplicada: cola de diálogos vacía al terminar un renglón (%d sitios)", n);
+}
+
 typedef LPTOP_LEVEL_EXCEPTION_FILTER(WINAPI *SUEF_t)(LPTOP_LEVEL_EXCEPTION_FILTER);
 static SUEF_t real_SetUnhandledExceptionFilter;
 static LPTOP_LEVEL_EXCEPTION_FILTER WINAPI hk_SetUnhandledExceptionFilter(LPTOP_LEVEL_EXCEPTION_FILTER f) {
@@ -1500,6 +1593,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved) {
         SetUnhandledExceptionFilter(crash_filter);
         make_dpi_aware();
         n = patch_module(GetModuleHandleA(NULL));
+        fix_2g_talk_queue(GetModuleHandleA(NULL));
         hook_winmm();
         GetModuleFileNameA(NULL, exe, sizeof exe);
         tlog("trhook cargado en %s: %d funciones interceptadas; KA.INI=%s CD=%c: \"%s\" escala=%d", exe, n,

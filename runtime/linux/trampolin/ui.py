@@ -1201,7 +1201,13 @@ class Library:
         self.lbl_status.configure(text='Jugando: %s…' % core.game(gid)['name'])
         self.win.iconify()
         q = queue.Queue()
-        threading.Thread(target=lambda: q.put(proton.complete_game(session)), daemon=True).start()
+
+        def wait():
+            try:
+                q.put(proton.complete_game(session))
+            except Exception as e:   # sin esto la biblioteca queda en «Jugando…» y no se sincroniza
+                q.put(e)
+        threading.Thread(target=wait, daemon=True).start()
 
         def poll():
             try:
@@ -1491,8 +1497,10 @@ def play(gid):
         session, err = start_with_progress(tkroot, theme, gid, root_dir, cfg)
         if err:
             raise err
-        diag = proton.complete_game(session)
-        sync_after_play(tkroot, theme, gid, root_dir, cfg)
+        try:
+            diag = proton.complete_game(session)
+        finally:
+            sync_after_play(tkroot, theme, gid, root_dir, cfg)   # la partida se guarda aunque falle el diagnóstico
         if diag:
             raise diag
     except Exception as e:

@@ -83,6 +83,14 @@ class CatalogTests(unittest.TestCase):
         self.assertIn('2 GB', info.message)
         self.assertEqual(errors.error_info(ValueError('raro')).code, 'TR-GEN-001')
 
+    def test_error_data_named_code(self):
+        # TR-RUN-004 lleva el código de salida en {code}: no debe chocar con el código del catálogo.
+        e = TrError('TR-RUN-004', Exception('detalle'), game='Juego', code='0x00000005')
+        self.assertEqual(e.code, 'TR-RUN-004')
+        info = errors.error_info(e)
+        self.assertEqual(info.code, 'TR-RUN-004')
+        self.assertIn('0x00000005', info.message)
+
 
 class IniTests(unittest.TestCase):
     def test_merge(self):
