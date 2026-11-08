@@ -150,39 +150,82 @@ static LONG WINAPI crash_filter(EXCEPTION_POINTERS *ep) {
 /*
  * Errores de programación de los juegos originales que en 1997 quedaban
  * ocultos. Se parchean en memoria al cargar (el exe del disco no se toca)
- * y solo si los bytes originales coinciden exactamente: con otro exe u otra
- * versión no se hace nada.
+ * y solo si los bytes originales de todos los sitios coinciden exactamente:
+ * con otro exe u otra versión no se hace nada.
  *
- * 2G.EXE (Primaria 2° Ciclo), cola de diálogos de los personajes (la
- * función de 0x459871-0x459C72 que lee «EndOfTalk=» de los .ATR): la cola es una
- * CStringList en this+0x98 (cabeza en this+0x9C, cantidad en this+0xA4).
- * Después de RemoveHead, tres caminos leen la nueva cabeza sin mirar si la
- * cola quedó vacía (los otros cuatro sí lo miran). Si el renglón que terminó
- * era el último, leen la dirección 0x8 y el juego se cierra. Pasó al terminar
- * un desafío de «amigo por correo» de «Mensajes de la cueva»:
- *   excepción 0xC0000005 en 2G.EXE+0x76295, acceso de lectura a 0x00000008.
- * La corrección agrega esa comprobación y, con la cola vacía, hace lo mismo
- * que el propio juego en sus caminos correctos: this+0xDC = 0 (no hay más
- * diálogo) y sale de la función por su epílogo normal. Con la cola no vacía
- * se ejecutan exactamente las mismas instrucciones que antes.
+ * Cola de diálogos de los personajes (KA-MFC: FG, 2G, KG, 3G). La cola es
+ * una CStringList dentro del objeto que habla (cabeza en this+0x9C; en 3G,
+ * this+0xEC). La función que la atiende (la que busca «EndOfTalk=» en los
+ * .ATR) hace RemoveHead del renglón que terminó y en varios caminos lee la
+ * nueva cabeza sin mirar si la cola quedó vacía (en otros sí lo mira). Si el
+ * renglón que terminó era el último, lee la dirección 0x8 y el juego se
+ * cierra. Pasó en 2G al terminar un desafío de «amigo por correo» de
+ * «Mensajes de la cueva»: excepción 0xC0000005 en 2G.EXE+0x76295.
+ *
+ * En cada sitio se pone un salto a un código que agrega esa comprobación:
+ *   cmp dword [this+cabeza],0 / jz vacia / <instrucción original> / jmp sitio+6
+ *   vacia: mov dword [this+hablando],0 / jmp <continuación>
+ * Con la cola vacía hace lo mismo que los caminos correctos del juego:
+ * marca que no hay más diálogo y sigue por donde el juego termina ese camino
+ * (hasta el epílogo normal de la función, sin el siguiente RemoveHead). En
+ * ningún sitio hay argumentos apilados, lo que sigue no depende de los flags,
+ * y la instrucción reemplazada es siempre un mov de 6 bytes que se ejecuta
+ * igual en el código nuevo: con renglones en la cola no cambia nada.
+ * Detalle y direcciones: RUNTIME.md §0.2 #23.
  */
 typedef struct {
-    DWORD rva;                 /* dónde se pone el salto al código nuevo */
-    unsigned char orig[12];    /* bytes que tienen que estar ahí */
-    int len;                   /* cuántos de esos bytes se reemplazan (salto + NOPs) */
-    DWORD back;                /* RVA a la que vuelve si la cola tiene renglones */
-    DWORD empty;               /* RVA a la que va si está vacía (0 = camino A, ver abajo) */
+    DWORD rva;                 /* instrucción de 6 bytes que se reemplaza por el salto */
+    unsigned char orig[12];    /* bytes que tienen que estar en rva */
+    DWORD empty;               /* RVA donde sigue si la cola está vacía */
 } FixSite;
 
-#define RVA_2G_EMPTY_EXIT 0x59C33   /* mov ecx,[ebp-10h]; mov [ecx+0DCh],0; jmp epílogo */
+typedef struct {
+    const char *name;
+    unsigned char reg;         /* registro que tiene «this»: 1 = ecx, 6 = esi (r/m de ModRM) */
+    DWORD head;                /* desplazamiento de la cabeza de la cola */
+    DWORD talking;             /* desplazamiento del indicador «hay diálogo» */
+    int count;
+    FixSite sites[5];
+} TalkFix;
 
-static const FixSite g_fix2G[] = {
-    /* A: 0x459989 mov eax,[ecx+9Ch] / mov ecx,[ecx+4] / mov edx,[eax+8] -> reproducir el renglón siguiente */
-    { 0x59989, { 0x8B, 0x81, 0x9C, 0x00, 0x00, 0x00, 0x8B, 0x49, 0x04, 0x8B, 0x50, 0x08 }, 9, 0x59992, 0 },
-    /* B: 0x459A7A mov eax,[ecx+9Ch] / lea ecx,[ebp-14h] / add eax,8 -> CString = cabeza (el fallo visto) */
-    { 0x59A7A, { 0x8B, 0x81, 0x9C, 0x00, 0x00, 0x00, 0x8D, 0x4D, 0xEC, 0x83, 0xC0, 0x08 }, 6, 0x59A80, RVA_2G_EMPTY_EXIT },
-    /* C: 0x459BE4, igual que B en otro camino */
-    { 0x59BE4, { 0x8B, 0x81, 0x9C, 0x00, 0x00, 0x00, 0x8D, 0x4D, 0xEC, 0x83, 0xC0, 0x08 }, 6, 0x59BEA, RVA_2G_EMPTY_EXIT },
+/* mov eax,[ecx+9Ch] seguido de 6 bytes propios de cada sitio */
+#define HEAD_ECX(a, b, c, d, e, f) { 0x8B, 0x81, 0x9C, 0x00, 0x00, 0x00, a, b, c, d, e, f }
+/* mov e?x,[esi+0ECh] (3G) */
+#define HEAD_ESI(m, a, b, c, d, e, f) { 0x8B, m, 0xEC, 0x00, 0x00, 0x00, a, b, c, d, e, f }
+
+static const TalkFix g_talkFixes[] = {
+    /* 2G.EXE, función 0x459871-0x459C72. Epílogo 0x4599A8; 0x45999B borra this+0xD4 y sale. */
+    { "2G", 1, 0x9C, 0xDC, 3, {
+        { 0x59989, HEAD_ECX(0x8B, 0x49, 0x04, 0x8B, 0x50, 0x08), 0x5999B },   /* tras RemoveHead 0x459978 */
+        { 0x59A7A, HEAD_ECX(0x8D, 0x4D, 0xEC, 0x83, 0xC0, 0x08), 0x599A8 },   /* tras 0x459A69 (el fallo visto) */
+        { 0x59BE4, HEAD_ECX(0x8D, 0x4D, 0xEC, 0x83, 0xC0, 0x08), 0x599A8 },   /* tras 0x459BD3 */
+    } },
+    /* FG.EXE, función hasta 0x4422A0. Epílogo 0x441F4C; 0x441F3F borra this+0x104 y sale.
+       0x441F11 (mov eax,[ecx+0C8h]) va antes de los push del llamado que usa la cabeza en 0x441F2D. */
+    { "FG", 1, 0x9C, 0x10C, 5, {
+        { 0x41EEA, HEAD_ECX(0x8B, 0x50, 0x08, 0x52, 0xE8, 0xC7), 0x41F3F },   /* tras RemoveHead 0x441ED9 */
+        { 0x41F11, { 0x8B, 0x81, 0xC8, 0x00, 0x00, 0x00, 0x8B, 0x91, 0xB4, 0x00, 0x00, 0x00 }, 0x41F3F },  /* tras 0x441F00 */
+        { 0x4205D, HEAD_ECX(0x8D, 0x4D, 0xE8, 0x83, 0xC0, 0x08), 0x41F4C },   /* tras 0x44204C */
+        { 0x421E2, HEAD_ECX(0x8B, 0x50, 0x08, 0x52, 0xE8, 0xCF), 0x41F4C },   /* tras 0x4421D1 */
+        { 0x42209, HEAD_ECX(0x8D, 0x4D, 0xE8, 0x83, 0xC0, 0x08), 0x41F4C },   /* tras 0x4421F8 */
+    } },
+    /* KG.EXE: la misma función que FG (instrucción por instrucción), 0x11040 bytes antes. */
+    { "KG", 1, 0x9C, 0x10C, 5, {
+        { 0x30EAA, HEAD_ECX(0x8B, 0x50, 0x08, 0x52, 0xE8, 0x87), 0x30EFF },
+        { 0x30ED1, { 0x8B, 0x81, 0xC8, 0x00, 0x00, 0x00, 0x8B, 0x91, 0xB4, 0x00, 0x00, 0x00 }, 0x30EFF },
+        { 0x3101D, HEAD_ECX(0x8D, 0x4D, 0xE8, 0x83, 0xC0, 0x08), 0x30F0C },
+        { 0x311A2, HEAD_ECX(0x8B, 0x50, 0x08, 0x52, 0xE8, 0x8F), 0x30F0C },
+        { 0x311C9, HEAD_ECX(0x8D, 0x4D, 0xE8, 0x83, 0xC0, 0x08), 0x30F0C },
+    } },
+    /* 3g.exe: la misma lógica compilada con marco en esp, this en esi. Epílogo 0x4A91FD;
+       0x4A8F6C borra this+0x154 y sale. 0x4A8F3C va antes de los push (cabeza leída en 0x4A8F52). */
+    { "3G", 6, 0xEC, 0x15C, 5, {
+        { 0xA8F16, HEAD_ESI(0x96, 0x8B, 0xCE, 0x8B, 0x42, 0x08, 0x50), 0xA8F6C },   /* tras RemoveHead 0x4A8F08 */
+        { 0xA8F3C, { 0x8B, 0x96, 0x18, 0x01, 0x00, 0x00, 0x6A, 0x01, 0x8D, 0x86, 0x10, 0x01 }, 0xA8F6C },  /* tras 0x4A8F2E */
+        { 0xA901E, HEAD_ESI(0x8E, 0x83, 0xC1, 0x08, 0x51, 0x8D, 0x4C), 0xA91FD },   /* tras 0x4A9010 */
+        { 0xA917A, HEAD_ESI(0x96, 0x8B, 0xCE, 0x8B, 0x42, 0x08, 0x50), 0xA91FD },   /* tras 0x4A916C */
+        { 0xA91A0, HEAD_ESI(0x96, 0x8D, 0x4C, 0x24, 0x10, 0x83, 0xC2), 0xA91FD },   /* tras 0x4A9192 */
+    } },
 };
 
 static unsigned char *emit_rel32(unsigned char *p, unsigned char op, const void *target) {
@@ -191,50 +234,61 @@ static unsigned char *emit_rel32(unsigned char *p, unsigned char op, const void 
     return p + 4;
 }
 
-static void fix_2g_talk_queue(HMODULE exe) {
+static unsigned char *emit_disp32(unsigned char *p, DWORD v) {
+    *(DWORD *)p = v;
+    return p + 4;
+}
+
+/* Devuelve cuántos sitios se parchearon (0 si el exe no es ninguno de la tabla). */
+static int fix_talk_queue(HMODULE exe) {
     unsigned char *base = (unsigned char *)exe;
-    const int n = sizeof g_fix2G / sizeof g_fix2G[0];
+    const TalkFix *fx = NULL;
     unsigned char *code, *p;
+    IMAGE_NT_HEADERS *nt;
+    DWORD imageSize;
+    size_t g;
     int i;
-    for (i = 0; i < n; i++)
-        if (IsBadReadPtr(base + g_fix2G[i].rva, 12) || memcmp(base + g_fix2G[i].rva, g_fix2G[i].orig, 12) != 0)
-            return;   /* no es este 2G.EXE: no se toca nada */
+    if (!base || ((IMAGE_DOS_HEADER *)base)->e_magic != IMAGE_DOS_SIGNATURE) return 0;
+    nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return 0;
+    imageSize = nt->OptionalHeader.SizeOfImage;
+    for (g = 0; g < sizeof g_talkFixes / sizeof g_talkFixes[0] && !fx; g++) {
+        const TalkFix *t = &g_talkFixes[g];
+        for (i = 0; i < t->count; i++)
+            if (t->sites[i].rva + 12 > imageSize || t->sites[i].empty >= imageSize ||
+                IsBadReadPtr(base + t->sites[i].rva, 12) || memcmp(base + t->sites[i].rva, t->sites[i].orig, 12) != 0)
+                break;
+        if (i == t->count) fx = t;
+    }
+    if (!fx) return 0;
     code = (unsigned char *)VirtualAlloc(NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     if (!code) {
-        tlog("Corrección de 2G (cola de diálogos): no se pudo reservar memoria");
-        return;
+        tlog("Corrección de %s (cola de diálogos): no se pudo reservar memoria", fx->name);
+        return 0;
     }
     p = code;
-    for (i = 0; i < n; i++) {
-        const FixSite *s = &g_fix2G[i];
-        unsigned char *site = base + s->rva, *stub = p;
+    for (i = 0; i < fx->count; i++) {
+        const FixSite *s = &fx->sites[i];
+        unsigned char *site = base + s->rva, *stub = p, *jz;
         DWORD old;
-        int k;
-        *p++ = 0x8B; *p++ = 0x81; *(DWORD *)p = 0x9C; p += 4;          /* mov eax,[ecx+9Ch] */
-        *p++ = 0x85; *p++ = 0xC0;                                       /* test eax,eax */
-        if (s->empty) {
-            *p++ = 0x0F; p = emit_rel32(p, 0x84, base + s->empty);      /* jz <salida del juego> */
-            p = emit_rel32(p, 0xE9, base + s->back);                    /* jmp <instrucción siguiente> */
-        } else {
-            /* Camino A: con la cola vacía no hay renglón que reproducir; se marca el
-               fin del diálogo y se sigue en 0x45999B (borra this+0xD4 y sale). */
-            *p++ = 0x74; *p++ = 3 + 5;                                  /* jz vacia */
-            *p++ = 0x8B; *p++ = 0x49; *p++ = 0x04;                      /* mov ecx,[ecx+4] */
-            p = emit_rel32(p, 0xE9, base + s->back);                    /* jmp 0x459992 */
-            *p++ = 0xC7; *p++ = 0x81; *(DWORD *)p = 0xDC; p += 4;      /* vacia: mov dword [ecx+0DCh],0 */
-            *(DWORD *)p = 0; p += 4;
-            p = emit_rel32(p, 0xE9, base + 0x5999B);                    /* jmp 0x45999B */
-        }
-        if (!VirtualProtect(site, s->len, PAGE_EXECUTE_READWRITE, &old)) {
-            tlog("Corrección de 2G (cola de diálogos): no se pudo escribir en 0x%08lX", (DWORD)(ULONG_PTR)site);
-            return;   /* los sitios ya parcheados quedan bien: cada uno es independiente */
+        *p++ = 0x83; *p++ = (unsigned char)(0xB8 | fx->reg); p = emit_disp32(p, fx->head); *p++ = 0x00; /* cmp dword [this+cabeza],0 */
+        *p++ = 0x74; jz = p++;                                                  /* jz vacia */
+        memcpy(p, site, 6); p += 6;                                             /* instrucción original */
+        p = emit_rel32(p, 0xE9, site + 6);                                      /* jmp sitio+6 */
+        *jz = (unsigned char)(p - (jz + 1));
+        *p++ = 0xC7; *p++ = (unsigned char)(0x80 | fx->reg); p = emit_disp32(p, fx->talking); p = emit_disp32(p, 0); /* vacia: mov dword [this+hablando],0 */
+        p = emit_rel32(p, 0xE9, base + s->empty);                               /* jmp continuación */
+        if (!VirtualProtect(site, 6, PAGE_EXECUTE_READWRITE, &old)) {
+            tlog("Corrección de %s (cola de diálogos): no se pudo escribir en 0x%08lX", fx->name, (DWORD)(ULONG_PTR)site);
+            return i;   /* los sitios ya parcheados quedan bien: cada uno es independiente */
         }
         emit_rel32(site, 0xE9, stub);
-        for (k = 5; k < s->len; k++) site[k] = 0x90;
-        VirtualProtect(site, s->len, old, &old);
+        site[5] = 0x90;
+        VirtualProtect(site, 6, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), site, 6);
     }
-    FlushInstructionCache(GetCurrentProcess(), base, 0x60000);
-    tlog("Corrección de 2G aplicada: cola de diálogos vacía al terminar un renglón (%d sitios)", n);
+    tlog("Corrección de %s aplicada: cola de diálogos vacía al terminar un renglón (%d sitios)", fx->name, fx->count);
+    return fx->count;
 }
 
 typedef LPTOP_LEVEL_EXCEPTION_FILTER(WINAPI *SUEF_t)(LPTOP_LEVEL_EXCEPTION_FILTER);
@@ -1593,7 +1647,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved) {
         SetUnhandledExceptionFilter(crash_filter);
         make_dpi_aware();
         n = patch_module(GetModuleHandleA(NULL));
-        fix_2g_talk_queue(GetModuleHandleA(NULL));
+        fix_talk_queue(GetModuleHandleA(NULL));
         hook_winmm();
         GetModuleFileNameA(NULL, exe, sizeof exe);
         tlog("trhook cargado en %s: %d funciones interceptadas; KA.INI=%s CD=%c: \"%s\" escala=%d", exe, n,

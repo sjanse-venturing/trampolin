@@ -8,7 +8,7 @@ ellos: qué cambia al jugar, no cómo está hecho. Ver «Publicar una versión»
 
 ### Correcciones
 
-- Educación Primaria – 2° Ciclo: el juego ya no se congela ni se cierra al terminar un desafío de «amigo por correo» (pasó con «Mensajes de la cueva»). Era un error del juego original, que ahora Trampolín corrige al abrirlo.
+- Educación Primaria – 2° Ciclo: el juego ya no se congela ni se cierra al terminar un desafío de «amigo por correo» (pasó con «Mensajes de la cueva»). Era un error del juego original al terminar un diálogo, que ahora Trampolín corrige al abrirlo. El mismo error estaba en Educación Infantil – 2° Ciclo, Educación Primaria – 1° Ciclo y Educación Primaria – 5° Curso, y también queda corregido.
 - Steam Deck y Linux: si un juego se cierra por un error, ahora se muestra el aviso que corresponde (antes aparecía «Ocurrió un error inesperado») y la partida se guarda igual en la sincronización.
 
 ## [1.3.1] - 2026-11-07
